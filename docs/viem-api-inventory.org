@@ -915,3 +915,67 @@ ENS chain guard, EIP-7702 authorization round trip), =contract-test= 9, =chains-
 =utils-test= 8, =events-test= 9 (emit/stop, consumer-side close, log batches one-per-put,
 bound-contract watcher, pending txs + blocks, error events, filters, 2000-log burst,
 sliding buffer).
+
+* 16. Phase 4–6 as built (2026-09-25) — errors namespace, live smoke, manual
+** 16.1 =viem-cljs.errors= (phase 4 leftover, now built)
+52 public defs, no interop: =wrap= (= =util/viem-error=), =data= / =error?= /
+=error-type= / =viem-error?= / =argument-error?= / =config-error?=, field accessors
+(=error-name message short-message details meta-messages docs-path version action
+reason=), cause walking (=cause-chain causes root walk-cause cause-named cause?=),
+=rpc-code= / =http-status= / =url=, revert accessors (=revert-data revert-error-name
+revert-args revert-reason=), 18 classification predicates, =category=, =retry-hints=,
+=retry-hint=, =retryable?=, =summary=. Every accessor also takes a RAW JS error (wrapped
+on the fly). To support them =util/error-summary= (each =:causes= entry) now also carries
+=:data= (converted — the ={:abi-item :error-name :args}= of a
+=ContractFunctionRevertedError=), =:reason=, =:status=, =:url= when present.
+The predicates are heuristics (class names + JSON-RPC / EIP-1193 codes + message text,
+the way viem classifies node errors itself, 9.2); =category= is a priority order and
+=retryable?= is =(some? (retry-hint e))= with =:backoff= (rate limit, connection,
+transient RPC), =:requery= (timeouts — the request may have landed), =:refresh-nonce=,
+=:bump-fee= (fee too low / replacement underpriced). Section 9.5's planned names
+(=revert-data rpc-code user-rejected? insufficient-funds? nonce-too-low? timeout?
+http-status execution-reverted?=) are all present (=execution-reverted?= is spelled
+=reverted?=).
+** 16.2 Secrets (5.2 made mechanical)
+=util/secret= wraps key material in a holder that prints as =#viem-cljs/secret
+<redacted>=; =util/reveal= unwraps at the one boundary that needs it; =util/redact= scrubs
+=util/secret-keys= (=:private-key :mnemonic :password :passphrase :seed :secret :api-key
+:token :xprv …=) and every holder at any depth of a map before printing.
+** 16.3 Live smoke observations [RUN anvil 1.8.1, viem 2.56.9, Node 22.23.2]
+11/11 sections pass (=dev/viem_cljs/smoke.cljs=, ≈4 s). Facts learned there, beyond what
+the stub could show:
+1. =watchBlocks= in polling mode emits the CURRENT head on its first poll even with
+   =emitOnBegin: false= (viem has no =prevBlock= to compare against); =watchBlockNumber=
+   does not. Consumers waiting for "the next block" must skip that first event.
+2. =getBalance= does not validate the address locally: ="0x123"= reaches the node and
+   comes back as =InvalidParamsRpcError= (-32602). =readContract= validates first
+   (=ContractFunctionExecutionError > CallExecutionError > InvalidAddressError=, no request).
+3. The ENS actions on a client without =chain= throw a PLAIN =Error("client chain not
+   configured. universalResolverAddress is required.")=, not a =BaseError= —
+   =errors/chain-error?= matches it by text.
+4. Real revert chains through http are deeper than the stub's (9.3): custom error →
+   =ContractFunctionExecutionError > ContractFunctionRevertedError > CallExecutionError >
+   ExecutionRevertedError > RpcRequestError > Object= (the root is viem's raw JSON-RPC error
+   object); the decoded ={:error-name :args :abi-item}= sits on the
+   =ContractFunctionRevertedError= (=:data=), the =Error(string)= reason on its =reason=.
+   An empty sender's =sendTransaction= gives =TransactionExecutionError >
+   InsufficientFundsError > EstimateGasExecutionError > InsufficientFundsError >
+   TransactionRejectedRpcError > RpcRequestError > Object= (anvil rejects at estimation).
+5. =call= to an address without code is NOT an error: ={:data nil}=.
+6. anvil 1.8.1 exits with code 0 on SIGTERM (no signal in the exit record); the port
+   refuses connections immediately afterwards (=HttpRequestError= without status,
+   ="fetch failed"= → =:connection=).
+7. =eth_fillTransaction= is not a problem on anvil: =sendTransaction= with a local account
+   goes through =prepareTransactionRequest= and lands as =eip1559= with nonce 0; the
+   impersonated json-rpc path (=eth_sendTransaction=) works after =anvil_impersonateAccount=.
+8. The smoke's Store contract was compiled once with solc 0.8.37 (PUSH0 in the bytecode;
+   anvil's default hardfork accepts it) and embedded as a constant — no toolchain
+   dependency (12.18 kept: anvil binary only).
+** 16.4 Test census after phase 4
+69 tests / 873 assertions: the 63 of 15.3 plus =errors-test= 6 (accessors on wrapped and
+raw errors, cause walking, revert accessors, classification and retry advice over 14
+constructed viem error instances + plain / Node errors + argument / config errors, one
+end-to-end stub rejection, secrets and redaction).
+** 16.5 Manual
+=docs/viem-cljs.org= (13 chapters + API index); =dev/check-api-index.sh= verifies that all
+460 public defs of =src/= appear in the index (run it after adding a public fn).

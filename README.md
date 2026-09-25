@@ -38,13 +38,31 @@ are core.async channels.
 | 0 | scaffold: shadow-cljs `:node-test` / `:dev` builds, `run-tests.sh`, `util` (kebab/camel, BigInt, error envelope) | done |
 | 1 | viem API inventory (`docs/viem-api-inventory.org`) | done |
 | 2 | `core` (the one interop namespace: clients, transports, chain registry, accounts incl. `account-from-keystore!`, action/watcher/utility dispatch), `chains` (registry access, `define-chain`, projections) | done |
-| 3 | `actions` (40 public + `wait-for-transaction-receipt!` + 26 wallet + 5 ens + 1 siwe + 30 test actions = 103 fns), `contract` (ABI codecs, `bind` / `get-contract` data contract, `read!` `simulate!` `write!` `simulate-and-write!` `estimate-gas!` `events!` `deploy!` `multicall!`, standard ABIs as data) | done |
-| 4 | `utils` (≈120 pure fns: units, address, hash, signature, encoding, data, rlp, transaction, typed data, authorization, ens hashing, constants, BigInt helpers), `events` (six watchers as channels + `stop!`, seven filter fns) — pulled into phase 3; `errors` accessor namespace (revert decoding, `rpc-code`, `user-rejected?` …) still pending | utils + events done, `errors` planned |
-| 5 | live smoke (`dev/viem_cljs/smoke.cljs`): spawns `~/.foundry/bin/anvil` as a subprocess (test + wallet + contract sections) and read-only public RPC sections, PASS/FAIL report | planned |
-| 6 | tier-2 extensions decided in inventory §10 (siwe builders, tokens, ens extras, blob helpers; op-stack / zksync / account-abstraction as separate follow-ups) | planned |
+| 3 | `actions` (40 public + `wait-for-transaction-receipt!` + 26 wallet + 5 ens + 1 siwe + 30 test actions = 103 fns), `contract` (ABI codecs, `bind` / `get-contract` data contract, `read!` `simulate!` `write!` `simulate-and-write!` `estimate-gas!` `events!` `deploy!` `multicall!`, standard ABIs as data), `utils` (133 pure fns + BigInt helpers + constants), `events` (six watchers as channels + `stop!`, seven filter fns) | done |
+| 4 | `errors` (52 defs: accessors `error-name` `causes` `walk-cause` `revert-data` `rpc-code` `http-status` …, classifiers `user-rejected?` `insufficient-funds?` `nonce-too-low?` `rate-limited?` `timeout?` `reverted?` …, `category` / `retryable?` / `retry-hint`), `util/secret` + `redact` (key material never prints), cause summaries carry `:data :reason :status :url` | done |
+| 5 | live smoke `dev/viem_cljs/smoke.cljs` (`:smoke` build): spawns `~/.foundry/bin/anvil` as a child process on a random localhost port, 11 sections (reads, account, transfer + BigInt deltas, contract deploy/simulate/write/read, events + live watchers, test actions, keystore, block watcher, error taxonomy on real node errors, cleanup), kills anvil in every case — 11/11 | done |
+| 6 | user manual `docs/viem-cljs.org` (13 chapters + script-checked API index, `dev/check-api-index.sh`) and this README | done |
+| 7 | tier-2 extensions decided in inventory §10 (siwe builders, tokens, ens extras, blob helpers; op-stack / zksync / account-abstraction as separate follow-ups; keystore encryption) | planned |
 
-`./run-tests.sh` — 63 tests / 728 assertions, no network, no keys (transports are
+`./run-tests.sh` — 69 tests / 873 assertions, no network, no keys (transports are
 `core/custom` over an in-memory JSON-RPC stub, `test/viem_cljs/test_util.cljs`).
+`npx shadow-cljs compile smoke && node target/smoke.js` — the live anvil smoke (needs
+foundry's `anvil` at `~/.foundry/bin/anvil`; no Internet, no real funds).
+
+## Documentation
+
+- [`docs/viem-cljs.org`](docs/viem-cljs.org) — the user manual: install and quick start,
+  clients and transports (incl. the custom-transport plain-Error trap), chains (lazy
+  registry, `by-id` canonical-first, `chain->map` and what it drops), accounts (private key /
+  mnemonic / HD / custom / json-rpc / keystore via Node crypto, secrets), actions (option
+  translation, results, reject-never-throw, test actions), contracts as data, utilities
+  (BigInt end to end), events as channels, error handling (envelope, `errors` namespace,
+  classification and retry advice, the taxonomy with live cause chains), design decisions,
+  testing and the live smoke, and a per-namespace API index.
+- [`docs/viem-api-inventory.org`](docs/viem-api-inventory.org) — the research the library
+  is built on: the viem 2.56.9 census (subpaths, actions, error classes, chains,
+  utilities), translation rules, coverage tiers, the numbered pitfalls and uncertainties
+  with the house position on each, and the as-built corrections (sections 15 and 16).
 
 ## Namespaces
 
@@ -56,7 +74,8 @@ are core.async channels.
 | `viem-cljs.chains` | `chain` `chains` `by-id` `aliases` `chain->map` `define-chain` `extract-chain` `contract-address` `testnet?` `rpc-url` `ws-url` `explorer-url` `native-currency` … |
 | `viem-cljs.utils` | pure utilities + BigInt helpers (`big` `add` `sub` `mul` `div` `cmp` …) + constants |
 | `viem-cljs.events` | `watch-block-number!` `watch-blocks!` `watch-block-headers!` `watch-event!` `watch-contract-event!` `watch-pending-transactions!` → channel, `stop!`, `watching?`, filter fns |
-| `viem-cljs.util` | boundary helpers (kebab/camel, `->js` `->clj`, BigInt, the error envelope + `error-name` `error-causes` `error-cause?`) |
+| `viem-cljs.errors` | accessors over the error envelope (`error-name` `causes` `walk-cause` `revert-data` `rpc-code` `http-status` `summary`), classifiers (`user-rejected?` `insufficient-funds?` `nonce-too-low?` `replacement-underpriced?` `rate-limited?` `timeout?` `connection-error?` `reverted?` `zero-data?` …), `category` `retryable?` `retry-hint` |
+| `viem-cljs.util` | boundary helpers (kebab/camel, `->js` `->clj`, BigInt, the error envelope + `error-name` `error-causes` `error-cause?`, `secret` / `reveal` / `redact`) |
 
 ## Coverage tiers (inventory §10)
 
@@ -120,11 +139,17 @@ Rejections are `ex-info` values (`viem-cljs.util/error-data`):
 `:short-message`, `:details`, `:meta-messages`, `:code`, `:causes` — the cause chain,
 outermost first — and `:cause`, the raw error), `:viem-cljs/argument-error`,
 `:viem-cljs/config-error`. `util/error-cause?` is the CLJS equivalent of viem's
-`err.walk(e => e instanceof X)`.
+`err.walk(e => e instanceof X)`. `viem-cljs.errors` builds on it: `(errors/category e)` →
+`:reverted` / `:insufficient-funds` / `:rate-limited` / `:timeout` / `:nonce` …,
+`(errors/retryable? e)`, `(errors/retry-hint e)` → `:backoff` / `:requery` /
+`:refresh-nonce` / `:bump-fee`, `(errors/revert-data e)` → `{:error-name "TooBig" :args [..]}`,
+`(errors/summary e)` → one printable line.
 
 ## Development
 
 ```
-./run-tests.sh                                  # exec's node at the end — never chain it mid-command
-npx shadow-cljs watch dev && node target/dev.js # REPL runtime
+./run-tests.sh                                        # exec's node at the end — never chain it mid-command
+npx shadow-cljs compile smoke && node target/smoke.js # live anvil smoke (spawns + kills anvil itself)
+./dev/check-api-index.sh                              # every public def is in the manual's API index
+npx shadow-cljs watch dev && node target/dev.js       # REPL runtime
 ```

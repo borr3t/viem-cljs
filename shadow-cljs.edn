@@ -24,4 +24,13 @@
   :dev {:target :node-script
         :main viem-cljs.dev/main
         :output-to "target/dev.js"
-        :devtools {:enabled true}}}}
+        :devtools {:enabled true}}
+
+  ;; LIVE smoke (phase 5): spawns a local anvil (~/.foundry/bin/anvil) as a
+  ;; child process, drives every namespace against it, kills it, prints a
+  ;; numbered PASS/FAIL report and exits non-zero on any failure. Never part
+  ;; of run-tests.sh. No network beyond 127.0.0.1.
+  ;;   npx shadow-cljs compile smoke && node target/smoke.js
+  :smoke {:target :node-script
+          :main viem-cljs.smoke/main
+          :output-to "target/smoke.js"}}}

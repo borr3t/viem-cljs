@@ -185,21 +185,33 @@
       (recur (jsget e "cause") (conj acc e) (inc n))
       acc)))
 
-(defn- error-summary [e]
-  (let [name (jsget e "name")]
+(defn- error-summary
+  "Data view of one error in a cause chain: `:name :short-message :message
+   :details :code` plus, when present, `:data` (converted — the decoded
+   revert of a `ContractFunctionRevertedError`, the `data` of a provider
+   error), `:reason` (revert reason string), `:status` / `:url` (HTTP)."
+  [e]
+  (let [name (jsget e "name")
+        data (jsget e "data")]
     (cond-> {:name (or name (some-> (jsget e "constructor" "name")) "Error")}
       (string? (jsget e "shortMessage")) (assoc :short-message (jsget e "shortMessage"))
       (string? (jsget e "message")) (assoc :message (jsget e "message"))
       (string? (jsget e "details")) (assoc :details (jsget e "details"))
-      (some? (jsget e "code")) (assoc :code (jsget e "code")))))
+      (some? (jsget e "code")) (assoc :code (jsget e "code"))
+      (some? data) (assoc :data (if (or (object? data) (array? data)) (->clj data) data))
+      (string? (jsget e "reason")) (assoc :reason (jsget e "reason"))
+      (number? (jsget e "status")) (assoc :status (jsget e "status"))
+      (string? (jsget e "url")) (assoc :url (jsget e "url")))))
 
 (defn viem-error
   "ex-info wrapping a viem BaseError (or any JS error thrown by viem).
    Data: {:type :viem-cljs/viem-error :name <class name> :short-message ..
    :details .. :meta-messages [..] :docs-path .. :version .. :code ..
-   :causes [{:name ..} ...] (outermost first) :root <deepest cause summary>
+   :causes [{:name ..} ...] (outermost first; each summary may also carry
+   :data :reason :status :url) :root <deepest cause summary>
    :action <kebab keyword of the wrapped call> :cause <the raw JS error>}.
-   Already-wrapped ex-info values are returned unchanged."
+   Already-wrapped ex-info values are returned unchanged. `viem-cljs.errors`
+   builds its accessors and classifiers on this data."
   ([e] (viem-error e nil))
   ([e action]
    (if (some? (ex-data e))
@@ -270,3 +282,69 @@
    chain — the CLJS equivalent of viem's `err.walk(e => e instanceof X)`."
   [e name]
   (boolean (some #(= name %) (error-causes e))))
+
+;; ---------------------------------------------------------------------------
+;; Secrets (inventory 5.2: key material never reaches logs, data or maps)
+;; ---------------------------------------------------------------------------
+
+(deftype Secret [value]
+  ;; Opaque holder for a private key / mnemonic / password: prints as
+  ;; #viem-cljs/secret <redacted>, compares by identity, never exposes the
+  ;; value through printing, `str`, or data conversion (`->js` passes the
+  ;; holder through untouched — call `reveal` at the one place that needs it).
+  IPrintWithWriter
+  (-pr-writer [_ writer _] (-write writer "#viem-cljs/secret <redacted>"))
+  Object
+  (toString [_] "#viem-cljs/secret <redacted>"))
+
+(defn secret
+  "Wraps `value` (a private key, mnemonic, password …) in an opaque `Secret`
+   holder that prints as `#viem-cljs/secret <redacted>`. Already-wrapped
+   values are returned unchanged; nil -> nil."
+  [value]
+  (cond
+    (nil? value) nil
+    (instance? Secret value) value
+    :else (Secret. value)))
+
+(defn secret?
+  "True for a `Secret` holder."
+  [x]
+  (instance? Secret x))
+
+(defn reveal
+  "The value inside a `Secret` (a non-secret passes through). Call it only
+   at the boundary that must see the raw value (`private-key->account`,
+   `account-from-keystore!`), never in anything that is printed or stored."
+  [x]
+  (if (instance? Secret x) (.-value x) x))
+
+(def secret-keys
+  "Kebab keys whose values are treated as secrets by `redact` wherever they
+   appear in a map."
+  #{:private-key :private-keys :mnemonic :password :passphrase :seed :secret
+    :secrets :api-key :api-secret :auth :authorization :token :xprv :keystore-password})
+
+(def redacted
+  "The placeholder `redact` substitutes for a secret."
+  "<redacted>")
+
+(defn redact
+  "Returns `x` with every secret replaced by `redacted`: values under
+   `secret-keys` (or under extra keys given in `more-keys`, a set) at any
+   depth, and every `Secret` holder. Vectors / sets are walked; everything
+   else is returned as is. Use it on any config or report before printing."
+  ([x] (redact x #{}))
+  ([x more-keys]
+   (let [keys* (into secret-keys more-keys)]
+     (cond
+       (instance? Secret x) redacted
+       (map? x) (into (empty x)
+                      (map (fn [[k v]]
+                             (if (contains? keys* k)
+                               [k (if (nil? v) v redacted)]
+                               [k (redact v more-keys)])))
+                      x)
+       (sequential? x) (into (empty x) (map #(redact % more-keys)) x)
+       (set? x) (into #{} (map #(redact % more-keys)) x)
+       :else x))))
