@@ -10,8 +10,9 @@ only; implementation happens in phases 2–4 (section 11 is the outline).
 *Product constraint that shapes everything below:* viem-cljs is a COMPLETE wrapper of
 viem's main surface (clients, transports, chains, actions, accounts, contracts,
 utilities, event watchers) written as ClojureScript only: no =^js= hints, no JavaScript
-interop at call sites (all viem interop confined to =viem-cljs.util= and
-=viem-cljs.binding=), kebab-case keyword maps in and out, promesa promises for every
+interop at call sites (all viem interop confined to =viem-cljs.core= — the binding
+namespace, see 11.1 and 15 — plus the boundary helpers of =viem-cljs.util=), kebab-case
+keyword maps in and out, promesa promises for every
 read/call, core.async channels for watchers. The only runtime npm dependency is =viem=.
 
 ** Method and evidence tags
@@ -70,7 +71,7 @@ Anything not covered by these tags is in section 12 "Pitfalls and uncertainties"
 | Subpath                       | Exports | Functions | Objects | Other | Content                                                    | Tier |
 |-------------------------------+---------+-----------+---------+-------+------------------------------------------------------------+------|
 | =viem=                        |     440 |       320 |      15 |   105 | clients, transports, 125 of the utils, 144 error classes, 3 verify actions, standard ABIs, constants | 1 |
-| =viem/actions=                |     116 |       114 |       2 |     0 | every public/wallet/test/ens/siwe action + =getContract=; objs: =defaultPrepareTransactionRequestParameters=, =token= | 1 |
+| =viem/actions=                |     116 |       114 |       2 |     0 | every public/wallet/test/ens action + =getContract= (NOT =verifySiweMessage=: that one is exported from =viem/siwe= only — corrected 2026-09-25, section 15); objs: =defaultPrepareTransactionRequestParameters=, =token= | 1 |
 | =viem/accounts=               |      30 |        19 |      11 |     0 | account factories, signing fns, =HDKey=, 10 BIP-39 wordlists, =nonceManager= | 1 |
 | =viem/chains=                 |     737 |         0 |     737 |     0 | chain objects (709 distinct ids, 28 aliases)               | 1 |
 | =viem/chains/utils=           |       4 |         4 |       0 |     0 | =defineChain extractChain getChainContractAddress assertCurrentChain= | 1 |
@@ -100,8 +101,10 @@ Anything not covered by these tags is in section 12 "Pitfalls and uncertainties"
 - Clients and transports: =createClient createPublicClient createWalletClient
   createTestClient createTransport http webSocket fallback custom rpcSchema
   publicActions walletActions testActions shouldThrow=. NOT =ipc= (only in =viem/node=).
-- Actions: only =verifyHash verifyMessage verifyTypedData= (the client-taking versions).
-  All other actions live in =viem/actions= only — the top level is *not* an action
+- Actions: none. The top-level =verifyHash verifyMessage verifyTypedData= are the PURE
+  =viem/utils= signature verifiers (=viem.verifyMessage === utils.verifyMessage= [RUN
+  2026-09-25], section 15) — the client-taking actions of the same names live in
+  =viem/actions= only. All other actions live in =viem/actions= only — the top level is *not* an action
   namespace; consumers either decorate a client or import from =viem/actions= [DOC clients/intro].
 - Chains: none. =viem.mainnet= is undefined; chains come from =viem/chains= [RUN].
 - Utilities: 125 of the 149 =viem/utils= functions. The 24 not re-exported are
@@ -323,7 +326,7 @@ the CLJS wrapper takes the scalar directly.
 | =getEnsName=      | =address gatewayUrls? strict? universalResolverAddress?= + block                 | =string | null=    |
 | =getEnsResolver=  | =name universalResolverAddress?= + block                                         | =Address=          |
 | =getEnsText=      | =name key gatewayUrls? strict? universalResolverAddress?= + block                | =string | null=    |
-| =verifySiweMessage= | =message signature address? domain? nonce? scheme? time?= + block               | =boolean=          |
+| =verifySiweMessage= | =message signature address? domain? nonce? scheme? time?= + block               | =boolean= (exported from =viem/siwe=, not =viem/actions= — section 15) |
 All ENS actions require a chain with =contracts.ensUniversalResolver= (mainnet, sepolia,
 holesky …) else =ChainDoesNotSupportContract=; names must be pre-normalized with
 =normalize= (UTS-46) [DOC ens].
@@ -506,7 +509,7 @@ ERC-20/721/1155/4626 helpers: viem ships only the ABIs (section 4.1) and, since 
 |----------------------------+------------------------------------------------+----------------------------------------------------------------------------------------------------------|
 | =watchBlockNumber=         | =onBlockNumber(bigint, prev)=                  | webSocket/ipc: =eth_subscribe newHeads= unless =poll:true=; http: polls =eth_blockNumber= every =pollingInterval=; =emitOnBegin=, =emitMissed= (polling only) |
 | =watchBlocks=              | =onBlock(block, prev)=                         | as above (+ =eth_getBlockByNumber=), =includeTransactions=, =blockTag= (polling only)                     |
-| =watchBlockHeaders=        | =onBlockHeader(header, prev)=                  | webSocket/ipc ONLY (=newHeads=); throws on http                                                          |
+| =watchBlockHeaders=        | =onBlockHeader(header, prev)=                  | webSocket/ipc ONLY (=newHeads=); on http/custom it does NOT throw synchronously [RUN 2026-09-25] — the failure surfaces through =onError= (the channel's =:error= event) |
 | =watchEvent=               | =onLogs(Log[])= batches                        | webSocket/ipc: =eth_subscribe logs= (with =strict=/=event= decoding); http: =eth_newFilter= + =eth_getFilterChanges=, falling back to =eth_getLogs= per block range when filters are unsupported; =fromBlock= |
 | =watchContractEvent=       | =onLogs(Log[])= (decoded =args eventName=)     | same as =watchEvent=, ABI-driven                                                                         |
 | =watchPendingTransactions= | =onTransactions(Hash[])= batches               | webSocket/ipc: =newPendingTransactions=; http: =eth_newPendingTransactionFilter= polling; =batch= (default true) |
@@ -639,8 +642,11 @@ everything a Node client needs; nothing here requires an extra dependency.
 
 * 11. Implementation outline for phases 2–4
 ** 11.1 Namespaces and public functions
-Rule: only =viem-cljs.util= and =viem-cljs.binding= contain JS interop; every other
-namespace is plain ClojureScript calling those two.
+Rule: only =viem-cljs.util= and =viem-cljs.core= contain JS interop; every other
+namespace is plain ClojureScript calling those two. (Phase 2 merged the planned
+=viem-cljs.binding= layer into =viem-cljs.core= per the phase-2 brief — "the ONE interop
+namespace" — and folded =accounts= into =core= and =test-actions= into =actions=;
+=utils= and =events= were pulled forward from phase 4. Section 15 has the as-built map.)
 | Namespace                | Phase | Public fns (proposal)                                                                                                                                                                      |
 |--------------------------+-------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | =viem-cljs.util=         | 0 ✓   | =kebab->camel camel->kebab transform-keys enum-value bigint? ->bigint bigint->number bigint->string ->js ->clj jsget viem-error config-error argument-error error-data error-type error-name error-causes error-cause?= |
@@ -742,7 +748,10 @@ test and contract sections, and uses a public RPC for read-only mainnet checks.
    make =by-id= ambiguous — return the first name in registry order and document.
    Open (implementation detail; the recommendation stands unless Parley objects).
 4. *Watcher backpressure.* viem invokes =onLogs= synchronously with batches; the channel
-   producer uses =put!= with a callback. With the default 1024 buffer, a slow consumer on
+   producer uses =put!= (VERIFIED 2026-09-25, phase 3: a 2000-log batch is fully delivered on
+   the default 1024 buffer — 1024 buffered + 976 pending puts — and a =(sliding-buffer 3)=
+   keeps the newest three; beyond 1024 pending puts core.async throws inside viem's
+   callback, which viem reports through =onError= → an =:error= event). With the default 1024 buffer, a slow consumer on
    a busy mainnet log stream will fill it; core.async then queues pending puts up to 1024
    and throws beyond. Options: (a) default =(async/chan 1024)= + documented =:buf=
    (sliding/dropping) — RECOMMENDED; (b) pause the watcher (unwatch/rewatch) when full —
@@ -787,7 +796,9 @@ test and contract sections, and uses a public RPC for read-only mainnet checks.
 14. *Keystore JSON (=localAccountJson=).* Not in viem's surface; ox (viem's dependency)
     has =ox/Keystore= but viem does not re-export it. DECIDED 2026-09-25 (Parley): YES,
     add =account-from-keystore!= — implemented with Node =crypto= + viem =keccak256= /
-    =privateKeyToAccount= (section 5.3), =ox/Keystore= as fallback. Remaining risk:
+    =privateKeyToAccount= (section 5.3), =ox/Keystore= as fallback. IMPLEMENTED 2026-09-25
+    (=core/account-from-keystore!=, scrypt + pbkdf2 round-trip tests; the ox fallback was
+    not needed). Remaining risk:
     ciphers other than =aes-128-ctr= or =prf= other than =hmac-sha256= are rejected with
     =:viem-cljs/argument-error= (the v3 spec allows nothing else in practice).
 15. *EIP-1193 provider accounts vs local accounts.* In Node there is no injected
@@ -828,3 +839,79 @@ test and contract sections, and uses a public RPC for read-only mainnet checks.
 - https://viem.sh/docs/error-handling , https://viem.sh/docs/glossary/errors
 - https://viem.sh/docs/ethers-migration (transport list cross-check)
 - https://viem.sh/tokens/actions (2.5x tokens feature)
+
+* 15. Phase 2+3 as built (2026-09-25) — corrections and implementation notes
+** 15.1 Namespace map as built (supersedes the 11.1 proposal where they differ)
+| Namespace          | Content                                                                                                              | Public defs |
+|--------------------+----------------------------------------------------------------------------------------------------------------------+-------------|
+| =viem-cljs.core=   | the ONE interop namespace: clients + =client-info= + =request!=, transport SPECS (=http web-socket ipc custom fallback= are data, resolved by =build-transport= at client construction; shorthand maps ={:http url}= …), chain registry primitives (lazy name/id indexes; objects opaque), accounts (all of the planned =accounts= ns incl. =account-from-keystore!=, =custom-account=, HD keys, wordlists, nonce managers, local signing), option translation (=opts->js=, =opts->js-value=), dispatch (=action! action-scalar! action-with-callbacks! watch! invoke-util invoke-util-raw constant=) | 65 |
+| =viem-cljs.actions= | 40 public + =wait-for-transaction-receipt!= + 26 wallet + 5 ens + 1 siwe + 30 test (27 map-taking + 3 positional scalars) = 103; the 4 =create*Filter= + 6 watchers are in =events= (→ 113 non-deprecated actions, matching 1.4) | 103 |
+| =viem-cljs.contract= | =parse-abi parse-abi-item parse-abi-parameters format-abi-item format-abi get-abi-item=, 13 codecs, =function-selector event-selector=, 6 standard ABIs as data, =bind= (alias =get-contract=) → ={:client :address :abi :account}= + private cached JS ABI, =read! simulate! write! simulate-and-write! estimate-gas! events! create-event-filter! deploy! multicall!=, =contract?= | 40 |
+| =viem-cljs.chains= | =chain chain? known? chains chain-count chain-id chain-name chain-ids by-id aliases chain->map define-chain extract-chain contract-address testnet? testnets mainnets rpc-urls rpc-url ws-urls ws-url explorer-url native-currency contracts source-id= | 25 |
+| =viem-cljs.utils=  | BigInt helpers (=big bigint? bigint->number bigint->string add sub mul div mod pow neg cmp lt? lte? gt? gte? zero? max min=), units (6), address (7), hash (14), signature (20), encoding (24), data (14), transaction (7), typed data (4), authorization (3), ens (3), =stringify=, constants (=zero-address zero-hash eth-address max-uint256 max-int256 min-int256 presign-message-prefix ether-units gwei-units= + =max-uint max-int min-int= by width) | 133 |
+| =viem-cljs.events= | six watchers → channel, =stop!=, =watching?=, =create-event-filter! create-block-filter! create-pending-transaction-filter! create-contract-event-filter! filter-changes! filter-logs! uninstall-filter!= | 15 |
+| =viem-cljs.errors= | NOT built yet (phase 4 leftover): =util/error-name error-causes error-cause? error-data= cover the walk pattern; =revert-data rpc-code user-rejected? …= accessors pending | — |
+Naming follows the decided rule (12.2): client / account construction has no =!= (=public-client=,
+=private-key->account= …) because it is local — the phase-2 brief spelled them =public-client!=;
+the locked rule won.
+** 15.2 Corrections to earlier sections (all [RUN] on viem 2.56.9, 2026-09-25)
+1. 1.3: top-level =verifyHash verifyMessage verifyTypedData= are the pure =viem/utils= fns,
+   not the client-taking actions (=viem.verifyMessage === utils.verifyMessage=). Wrapped as
+   =utils/verify-*= (pure, promise) and =actions/verify-*!= (client-taking).
+2. 1.2 / 3.4: =verifySiweMessage= is exported from =viem/siwe= only (=viem/actions= lacks it);
+   =core/action!= resolves names in =viem/actions=, then =viem/siwe=, then =viem/ens=.
+3. 8.1: =watchBlockHeaders= over http/custom does not throw synchronously; errors arrive via
+   =onError= (channel =:error= events).
+4. 2.2 (custom transport): a provider =request= that rejects must reject with a PLAIN
+   =Error= carrying =code= — viem's =prepareTransactionRequest= now tries
+   =eth_fillTransaction= first and =walk()=s the failure; a CLJS =ExceptionInfo= has a
+   =cause= slot holding =null=, which =walk= dereferences (=TypeError: reading 'name'=).
+   =core/custom= therefore converts ex-info rejections into plain errors (=:code= / =:data=
+   copied). Test stubs throw =(ex-info msg {:code -32601})= and are classified as
+   =MethodNotFoundRpcError= as before.
+5. 3.3: =setStorageAt='s =value= is a hex WORD, not a quantity — the only per-action
+   exemption from the quantity coercion of 11.2 rule 4 (=core/action-skip-keys=). =setNonce=
+   sends the nonce hex-encoded (=anvil_setNonce [addr "0x3"]=); =reset= wraps its params as
+   ={forking: {blockNumber, jsonRpcUrl}}=.
+6. 4.2: =encodeEventTopics= returns =nil= for indexed params left unfiltered
+   (=[topic0 from nil]=); =encodeFunctionResult= with a single (tuple[]) output takes the
+   bare value, not a one-element wrapper.
+7. 5.1: =account.getHdKey()= returns the account's DERIVED key, and =hdKeyToAccount(hdKey,
+   opts)= derives =path= RELATIVE to the key it is given — feeding an account's HDKey back in
+   re-derives to a different address. Use =hd-key-from-seed= / =hd-key-from-extended-key=
+   for a root. =mnemonicToAccount= rejects a bad mnemonic with its own error (wrapped as
+   =:viem-cljs/viem-error=, not =argument-error=).
+8. 7: =ethAddress= is lowercase (=0xeeee…eeee=); =trim= is byte-wise (="0x0001"= → ="0x01"=);
+   =padHex= with =dir:right= pads hex DIGITS (="0x1"= size 2 → ="0x1000"=); =toRlp(["0x05",
+   "0x0c"])= = ="0xc2050c"=; =bytesToRlp= returns bytes unless =to:'hex'=;
+   =estimateFeesPerGas({type:'legacy'})= applies the 1.2 base-fee multiplier
+   (=gasPrice * 1.2=); =toFunctionSelector= & co. accept bare signature strings
+   (="transfer(address,uint256)"=) that =parseAbiItem= rejects — =utils/function-selector=
+   passes strings verbatim; =hashDomain= needs =types.EIP712Domain= (=domain-separator=
+   derives it).
+9. 6.1: the 737 exports split 337 testnets / 400 others; =zoraSepolia= has id 999999999
+   (large ids are real chains — do not use them as "unknown" sentinels).
+10. 11.3 rule 4 refined: =simulate-contract!= / =prepare-transaction-request!= /
+    =fill-transaction!= results get their raw =account= / =chain= objects re-attached
+    (top level and under =:request=) so the idiomatic pairs (=simulate → write=, =prepare
+    → send=) pass opaque objects instead of re-cased maps; filter objects are returned as
+    ={:id :type :filter <raw>}= (the raw object holds the transport =request= fn) and
+    accepted back under =:filter=.
+11. 12.1 practical note: a CLJS integer LITERAL above 2^53 (=1000000000000000000=) is a
+    double and is rejected by =->bigint= — write wei literals as strings or via
+    =utils/parse-ether=.
+12. 9.5: error DATA maps must not use =:type= for payload (it is the envelope
+    discriminator) — two early bugs (=account-method!=, =assert-transaction=) clobbered it;
+    fixed (=:account-type=, =:transaction-type=).
+** 15.3 Test census (network-free, =core/custom= over =test-util/stub=)
+63 tests / 728 assertions: =util-test= 7, =core-test= 13 (clients, transports + config
+errors, option translation, registry primitives, private-key / mnemonic / HD / custom /
+json-rpc accounts, keystore scrypt+pbkdf2+JSON+wrong-password, raw request + error
+walking, dispatch guards, bare client, nonce manager), =actions-test= 12 (param → wire
+translation incl. block tags / quantities, result walking, contract reads + decoded logs,
+cause chains for RPC / zero-data / invalid-address / insufficient-funds, wallet signing,
+send/prepare/simulate/write pairs, receipt wait + timeout, 30 test actions on the wire,
+ENS chain guard, EIP-7702 authorization round trip), =contract-test= 9, =chains-test= 5,
+=utils-test= 8, =events-test= 9 (emit/stop, consumer-side close, log batches one-per-put,
+bound-contract watcher, pending txs + blocks, error events, filters, 2000-log burst,
+sliding buffer).
