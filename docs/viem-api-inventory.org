@@ -1,0 +1,830 @@
+#+TITLE: viem API inventory — viem-cljs phase 1
+#+DATE: 2026-09-25
+#+STARTUP: overview
+#+OPTIONS: toc:3
+
+* About this document
+This is the verified inventory of the viem surface that viem-cljs wraps. It is research
+only; implementation happens in phases 2–4 (section 11 is the outline).
+
+*Product constraint that shapes everything below:* viem-cljs is a COMPLETE wrapper of
+viem's main surface (clients, transports, chains, actions, accounts, contracts,
+utilities, event watchers) written as ClojureScript only: no =^js= hints, no JavaScript
+interop at call sites (all viem interop confined to =viem-cljs.util= and
+=viem-cljs.binding=), kebab-case keyword maps in and out, promesa promises for every
+read/call, core.async channels for watchers. The only runtime npm dependency is =viem=.
+
+** Method and evidence tags
+Every fact carries one or more evidence tags:
+- =[DTS]= — read from the installed package's type declarations,
+  =node_modules/viem/_types/**/*.d.ts= (viem *2.56.9*, installed 2026-09-25 by
+  =npm install=; =package.json= =exports= map, 27 subpaths). Parameter names, option
+  keys, return types and error class names come from here. Export *names* were
+  additionally enumerated at runtime (=Object.keys(require("viem/<subpath>"))=) so
+  every name in a census table exists in the installed CJS build.
+- =[RUN]= — observed by running the installed package in Node 22.23.2 during this
+  session: a =custom= transport over an in-memory =request= stub (no network), the ABI
+  codecs, unit/address/hash utilities, account factories with a *fresh random key that
+  was generated in-process and discarded* (never printed, never written).
+- =[DOC]= — from https://viem.sh (pages listed in section 14), used for semantics only.
+Anything not covered by these tags is in section 12 "Pitfalls and uncertainties".
+
+** Reading conventions
+- viem names are given verbatim (camelCase); the kebab-case keyword translation lives in
+  section 11.2. A "quantity" is a JavaScript =bigint= on the viem side; an "index" is a
+  JavaScript =number=; =Hex= / =Hash= / =Address= are =0x=-prefixed strings.
+- "Tier" column values (section 10): =1= complete wrap in phases 2–4, =2= wrap later or
+  partially, =3= not wrapped (with the reason).
+- The CLJS names proposed in tables are the section-11 proposal, not yet code.
+
+* 0. Coverage checklist
+| #  | Area                                                       | Status   | Section |
+|----+------------------------------------------------------------+----------+---------|
+| 1  | Package + version census (subpaths, top-level re-exports)  | complete | 1       |
+| 2  | Clients, transports, decorators                            | complete | 2       |
+| 3  | Actions: public 51 / wallet 26 / test 30 / ens 5 / siwe 1  | complete | 3       |
+| 4  | Contracts: ABI forms, codecs, getContract, multicall       | complete | 4       |
+| 5  | Accounts (local, HD, custom, json-rpc)                     | complete | 5       |
+| 6  | Chains registry (737 exports) and defineChain              | complete | 6       |
+| 7  | Utilities (158 exports in =viem/utils=)                    | complete | 7       |
+| 8  | Event watchers and filters → core.async design             | complete | 8       |
+| 9  | Error taxonomy (144 classes) and the walk pattern          | complete | 9       |
+| 10 | Coverage tiers                                             | decided  | 10      |
+| 11 | Phase 2/3/4 outline: namespaces, translation rules         | complete | 11      |
+| 12 | Pitfalls and numbered uncertainties                        | 19 items, 9 decided 2026-09-25 | 12 |
+
+* 1. Package and version census
+** 1.1 Installed package [DTS][RUN]
+| Fact                | Value                                                                    |
+|---------------------+--------------------------------------------------------------------------|
+| name / version      | =viem= *2.56.9* (npm =latest= on 2026-09-25)                             |
+| entry points        | =main ./_cjs/index.js=, =module ./_esm/index.js=, =types ./_types/index.d.ts= |
+| module format       | dual CJS + ESM; shadow-cljs =(:require ["viem" :as viem])= resolves the CJS build (=exports["."].default=) |
+| =sideEffects=       | =false=                                                                  |
+| =engines=           | none declared; needs global =fetch= and =WebSocket= (Node ≥ 18; tested on 22) |
+| runtime deps        | =@noble/curves 1.9.1=, =@noble/hashes 1.8.0=, =@scure/bip32 1.7.0=, =@scure/bip39 1.6.0=, =abitype 1.2.3=, =isows 1.0.7=, =ox 0.14.45=, =ws 8.21.0= (all transitive: viem-cljs declares only =viem=) |
+| peer deps           | =typescript >=5.0.4= (optional; irrelevant to CLJS)                      |
+| keystore support    | none in viem; its dependency =ox 0.14.45= ships =ox/Keystore= (=decrypt encrypt toKey scrypt pbkdf2=) which viem does NOT re-export [RUN] — see 5.3 |
+
+** 1.2 Subpath census (=package.json= =exports=, runtime =Object.keys=) [RUN]
+| Subpath                       | Exports | Functions | Objects | Other | Content                                                    | Tier |
+|-------------------------------+---------+-----------+---------+-------+------------------------------------------------------------+------|
+| =viem=                        |     440 |       320 |      15 |   105 | clients, transports, 125 of the utils, 144 error classes, 3 verify actions, standard ABIs, constants | 1 |
+| =viem/actions=                |     116 |       114 |       2 |     0 | every public/wallet/test/ens/siwe action + =getContract=; objs: =defaultPrepareTransactionRequestParameters=, =token= | 1 |
+| =viem/accounts=               |      30 |        19 |      11 |     0 | account factories, signing fns, =HDKey=, 10 BIP-39 wordlists, =nonceManager= | 1 |
+| =viem/chains=                 |     737 |         0 |     737 |     0 | chain objects (709 distinct ids, 28 aliases)               | 1 |
+| =viem/chains/utils=           |       4 |         4 |       0 |     0 | =defineChain extractChain getChainContractAddress assertCurrentChain= | 1 |
+| =viem/utils=                  |     158 |       149 |       8 |     1 | ABI codecs, units, address, hash, signature, encoding, rlp, chain, formatters, rpc clients | 1 (public subset) |
+| =viem/ens=                    |      11 |        11 |       0 |     0 | 5 ens actions + =namehash labelhash normalize packetToBytes parseAvatarRecord toCoinType= | 1 (actions+3 utils) |
+| =viem/siwe=                   |       6 |         6 |       0 |     0 | =createSiweMessage generateSiweNonce parseSiweMessage validateSiweMessage verifySiweMessage= + error | 2 |
+| =viem/tokens=                 |      34 |        33 |       1 |     0 | =defineToken=, 32 stablecoin token definitions, =tokens=  | 2 |
+| =viem/nonce=                  |       3 |         2 |       1 |     0 | =createNonceManager jsonRpc nonceManager=                  | 1 |
+| =viem/node=                   |       3 |         2 |       0 |     1 | =ipc getIpcRpcClient mainnetTrustedSetupPath=              | 1 (=ipc=) |
+| =viem/window=                 |       0 |         0 |       0 |     0 | TypeScript types only (=window.ethereum= typing)           | 3 |
+| =viem/experimental=           |      21 |        21 |       0 |     0 | EIP-5792/7702/7715/7739/7811/7821/7846/7895 decorators + fns | 2 |
+| =viem/experimental/erc7739=   |       6 |         6 |       0 |     0 | ERC-7739 signing                                           | 2 |
+| =viem/experimental/erc7821=   |      10 |        10 |       0 |     0 | ERC-7821 batch executor                                    | 2 |
+| =viem/experimental/erc7811=   |       2 |         2 |       0 |     0 | wallet asset discovery                                     | 2 |
+| =viem/experimental/erc7846=   |       3 |         3 |       0 |     0 | wallet connect                                             | 2 |
+| =viem/experimental/erc7895=   |       2 |         2 |       0 |     0 | sub-accounts                                               | 2 |
+| =viem/account-abstraction=    |      67 |        59 |       4 |     4 | ERC-4337 bundler/paymaster clients, smart accounts, 29 error classes, entry point ABIs/addresses | 2 |
+| =viem/op-stack=               |      81 |        50 |      31 |     0 | OP Stack L1/L2 actions, 28 OP chains, =chainConfig=, serializers | 2 |
+| =viem/zksync=                 |      63 |        49 |      12 |     2 | ZKsync actions, 12 chain objects, EIP-712 tx serializers   | 2 |
+| =viem/celo=                   |       3 |         2 |       1 |     0 | =parseTransaction serializeTransaction chainConfig=        | 2 |
+| =viem/linea=                  |       3 |         1 |       2 |     0 | =estimateGas linea lineaSepolia=                           | 2 |
+| =viem/tempo=                  |      53 |        18 |      35 |     0 | Tempo chain support (new in 2.5x)                          | 2 |
+| =viem/tempo/actions=          |      19 |         0 |      19 |     0 | Tempo action groups                                        | 2 |
+| =viem/tempo/chains=           |       6 |         0 |       6 |     0 | Tempo chains                                               | 2 |
+
+** 1.3 What =viem= (top level) re-exports [RUN]
+- Clients and transports: =createClient createPublicClient createWalletClient
+  createTestClient createTransport http webSocket fallback custom rpcSchema
+  publicActions walletActions testActions shouldThrow=. NOT =ipc= (only in =viem/node=).
+- Actions: only =verifyHash verifyMessage verifyTypedData= (the client-taking versions).
+  All other actions live in =viem/actions= only — the top level is *not* an action
+  namespace; consumers either decorate a client or import from =viem/actions= [DOC clients/intro].
+- Chains: none. =viem.mainnet= is undefined; chains come from =viem/chains= [RUN].
+- Utilities: 125 of the 149 =viem/utils= functions. The 24 not re-exported are
+  internal (=buildRequest getAction getCallError getEstimateGasError getNodeError
+  getTransactionError containsNodeError extract defineFormatter filterChains
+  bytesToBigint getHttpRpcClient getSocketRpcClient getWebSocketRpcClient getSocket
+  socketClientCache rpc arrayRegex bytesRegex integerRegex=) or re-homed in
+  =viem/accounts= (=parseAccount publicKeyToAddress=) / =viem/experimental=
+  (=hashAuthorization recoverAuthorizationAddress serializeAuthorizationList
+  verifyAuthorization=) / ABI formatting (=formatAbiItem formatAbiParams
+  formatAbiItemWithArgs=). Plus top-level-only: =getContract=, =parseAbi parseAbiItem
+  parseAbiParameter parseAbiParameters= (from abitype), =namehash labelhash=,
+  =blobsTo*=, =setupKzg defineKzg=, =withCache withRetry withTimeout=, =setErrorConfig=.
+- Error classes: 144 from =viem/errors= plus abitype's 15 (=CircularReferenceError
+  InvalidAbiItemError … UnknownSignatureError UnknownTypeError=), =EIP1193ProviderRpcError=,
+  =WaitForCallsStatusTimeoutError=.
+- Data: =erc20Abi erc20Abi_bytes32 erc721Abi erc1155Abi erc4626Abi multicall3Abi
+  universalSignatureValidatorAbi erc6492SignatureValidatorAbi offchainLookupAbiItem
+  etherUnits gweiUnits weiUnits transactionType rpcTransactionType nonceManager=.
+- Constants (105): =zeroAddress zeroHash ethAddress presignMessagePrefix
+  offchainLookupSignature=, =maxInt8…maxInt256 minInt8…minInt256 maxUint8…maxUint256=
+  (32 sizes each), three bytecode blobs.
+
+** 1.4 Headline numbers
+| Metric                                        | Count |
+|-----------------------------------------------+-------|
+| actions (functions in =viem/actions=)         |   114 |
+| …of which public / wallet / test / ens / siwe | 51 / 26 / 30 / 5 / 1 (+ =getContract=) |
+| decorated client methods: public / wallet / test(anvil) | 63 / 29 / 30 [RUN] |
+| chains exported / distinct ids / testnets     | 737 / 709 / 337 |
+| chains with formatters / serializers / L2 =sourceId= | 87 / 85 / 69 |
+| utilities in =viem/utils=                     |   158 |
+| error classes in =viem/errors=                |   144 |
+| top-level exports                             |   440 |
+
+* 2. Clients and transports
+** 2.1 Constructors [DTS clients/*.d.ts]
+| Function             | Config keys (all optional unless noted)                                                                      | Returns |
+|----------------------+--------------------------------------------------------------------------------------------------------------+---------|
+| =createClient=       | =transport= (required), =chain=, =account= (Account or Address), =batch {multicall: boolean | {batchSize, deployless, wait}}=, =cacheTime=, =ccipRead ({request} | false)=, =dataSuffix=, =experimental_blockTag=, =key=, =name=, =pollingInterval=, =rpcSchema=, =tokens=, =type= | bare client: =account batch cacheTime ccipRead chain dataSuffix key name pollingInterval request tokens transport type uid extend= [RUN] |
+| =createPublicClient= | =Pick<ClientConfig, batch cacheTime ccipRead chain key name pollingInterval rpcSchema transport tokens>=      | client + 63 public actions + =token= (2.5x tokens feature) [RUN] |
+| =createWalletClient= | =Pick<ClientConfig, account cacheTime ccipRead chain key name pollingInterval rpcSchema transport tokens>=    | client + 29 wallet actions [RUN] |
+| =createTestClient=   | =mode= (required: ='anvil' | 'hardhat' | 'ganache'=) + =account cacheTime chain key name pollingInterval rpcSchema transport= | client + 30 test actions, =mode= field [RUN] |
+Defaults observed [RUN]: =pollingInterval= 4000 ms, =cacheTime= = pollingInterval, =key=
+"public"/"wallet"/"test"/"base", =name= "Public Client" etc., =uid= random.
+
+** 2.2 Transports [DTS clients/transports/*.d.ts][DOC]
+| Transport   | Signature                                   | Config keys                                                                                                   | Notes |
+|-------------+---------------------------------------------+---------------------------------------------------------------------------------------------------------------+-------|
+| =http=      | =http(url?, config?)=                       | =batch (boolean | {batchSize, wait})=, =fetchFn=, =fetchOptions=, =maxResponseBodySize=, =onFetchRequest=, =onFetchResponse=, =key=, =methods=, =name=, =raw=, =retryCount= (3), =retryDelay= (150), =rpcSchema=, =timeout= (10000) | no url → =chain.rpcUrls.default.http[0]= [RUN]; no url AND no chain → =UrlRequiredError= thrown *synchronously* by =createClient= [RUN] |
+| =webSocket= | =webSocket(url?, config?)=                  | =keepAlive=, =key=, =methods=, =name=, =reconnect=, =retryCount=, =retryDelay=, =timeout=                     | creation is lazy (no socket until first request) [RUN]; exposes =getSocket getRpcClient subscribe= (=newHeads=, =newPendingTransactions=, =logs=, =syncing=) |
+| =fallback=  | =fallback(transports[], config?)=           | =name=, =retryCount=, =shouldThrow (error → boolean)=, =rank (boolean | {interval, ping, sampleCount, timeout, weights {latency, stability}})= | value exposes =onResponse=, =transports= |
+| =custom=    | =custom(provider, config?)=                 | provider = any =\{request({method, params}) → Promise\}= (EIP-1193 shape); =key=, =methods=, =name=, =retryCount=, =retryDelay= | the test-suite transport: an in-memory stub satisfies it [RUN] |
+| =ipc=       | =ipc(path, config?)= (from =viem/node=)     | =key=, =methods=, =name=, =reconnect=, =retryCount=, =retryDelay=, =timeout=                                  | Node only; same =subscribe= surface as webSocket |
+| =createTransport= | low-level factory                     | =key type request methods name retryCount retryDelay timeout=                                                 | Tier 3 (internal) |
+Transports that do NOT exist in viem 2.56.9: =localStorage=, =memory= (the task brief
+listed them as candidates; there are no such exports anywhere in the package) [RUN].
+DECIDED 2026-09-25: not invented. An in-memory transport is *covered by =custom=* (any
+={request}= fn, which is exactly what the test suite uses); a localStorage transport is
+out of scope (browser-only concept, no viem counterpart).
+Transport =methods= = ={include?: string[], exclude?: string[]}= allow-list of RPC methods.
+
+** 2.3 The actions pattern [DOC clients/intro][DOC clients/custom][RUN]
+Two equivalent call shapes exist:
+1. *Decorated client*: =client.getBlock(args)= — =createPublicClient= applies
+   =publicActions=, =createWalletClient= applies =walletActions=, =createTestClient=
+   applies =testActions({mode})=; =client.extend(decorator)= adds more (e.g.
+   =createClient(...).extend(publicActions).extend(walletActions)=).
+2. *Tree-shakable*: =import { getBlock } from 'viem/actions'; getBlock(client, args)= —
+   the same function; the decorator merely binds =client= as the first argument
+   (=publicActions(client)= returns an object of closures) [RUN: 63 keys].
+viem-cljs wraps shape 2 (section 11.1): one CLJS fn per action, client as first
+argument, works on ANY client (bare, public, wallet, test) — the decorated methods are
+sugar and are Tier 3.
+
+** 2.4 =client.request= [DTS]
+=client.request({method, params}, options?)= is the EIP-1193 request fn of the transport,
+typed by =rpcSchema= (=EIP1474Methods= by default, test methods for test clients). Wrapped
+as the raw escape hatch =core/request!= (Tier 1).
+
+* 3. Actions census
+Every action is =(client, parameters) → Promise= unless noted; watchers return an
+=unwatch= function (section 8). "Block selector" = one of =blockNumber (bigint)= |
+=blockTag ('latest'|'earliest'|'pending'|'safe'|'finalized')= | =blockHash (+ requireCanonical)=.
+** 3.1 Public actions (51) [DTS actions/public/*.d.ts]
+| viem                          | Parameters (viem keys)                                                                                              | Returns                                    |
+|-------------------------------+---------------------------------------------------------------------------------------------------------------------+--------------------------------------------|
+| =call=                        | tx request fields (=to data value gas gasPrice maxFeePerGas maxPriorityFeePerGas nonce accessList authorizationList type= …) + =account batch blockOverrides code factory factoryData requestOptions stateOverride= + block selector | ={data: Hex | undefined}=          |
+| =createAccessList=            | tx request (minus =from nonce accessList=) + =account= + =blockNumber|blockTag=                                     | ={accessList, gasUsed: bigint}=            |
+| =createBlockFilter=           | —                                                                                                                   | Filter                                     |
+| =createContractEventFilter=   | =abi address? eventName? args? fromBlock? toBlock? strict?=                                                         | Filter                                     |
+| =createEventFilter=           | =address? event? events? args? fromBlock? toBlock? strict?=                                                         | Filter                                     |
+| =createPendingTransactionFilter= | —                                                                                                                | Filter                                     |
+| =estimateContractGas=         | =abi address functionName args? account? value? dataSuffix?= + tx fee fields + block selector                       | =bigint=                                   |
+| =estimateFeesPerGas=          | =type? ('eip1559' default | 'legacy') chain?=                                                                       | ={maxFeePerGas, maxPriorityFeePerGas}= or ={gasPrice}= |
+| =estimateGas=                 | tx request + =account? prepare? stateOverride?= + =blockNumber|blockTag=                                            | =bigint=                                   |
+| =estimateMaxPriorityFeePerGas= | =chain?=                                                                                                           | =bigint=                                   |
+| =fillTransaction=             | tx request + =account? chain? nonceManager?= (uses =eth_fillTransaction=)                                           | ={raw: Hex, transaction, capabilities?}=   |
+| =getBalance=                  | =address= + block selector                                                                                          | =bigint=                                   |
+| =getBlobBaseFee=              | —                                                                                                                   | =bigint=                                   |
+| =getBlock=                    | =includeTransactions?= + =blockHash|blockNumber|blockTag=                                                           | Block (section 11.3)                       |
+| =getBlockNumber=              | =cacheTime?=                                                                                                        | =bigint= (cached per client =cacheTime=)   |
+| =getBlockReceipts=            | =blockHash|blockNumber|blockTag=                                                                                    | Receipt[]                                  |
+| =getBlockTransactionCount=    | =blockHash|blockNumber|blockTag=                                                                                    | =number=                                   |
+| =getBytecode=                 | deprecated alias of =getCode=                                                                                       | =Hex | undefined=                          |
+| =getChainId=                  | —                                                                                                                   | =number=                                   |
+| =getCode=                     | =address= + block selector                                                                                          | =Hex | undefined=                          |
+| =getContractEvents=           | =abi address? eventName? args? strict?= + =fromBlock|toBlock= or =blockHash=                                        | Log[] (decoded =args eventName=)           |
+| =getDelegation=               | =address= + =blockNumber|blockTag= (EIP-7702)                                                                       | =Address | undefined=                      |
+| =getEip712Domain=             | =address factory? factoryData?= (ERC-5267)                                                                          | ={domain, fields, extensions}=             |
+| =getFeeHistory=               | =blockCount (number) rewardPercentiles (number[])= + =blockNumber|blockTag=                                         | ={baseFeePerGas: bigint[], gasUsedRatio: number[], oldestBlock: bigint, reward?: bigint[][]}= |
+| =getFilterChanges=            | =filter=                                                                                                            | Log[] / Hash[] by filter type              |
+| =getFilterLogs=               | =filter=                                                                                                            | Log[]                                      |
+| =getGasPrice=                 | —                                                                                                                   | =bigint=                                   |
+| =getLogs=                     | =address? event? events? args? strict?= + =fromBlock|toBlock= or =blockHash=                                        | Log[]                                      |
+| =getProof=                    | =address storageKeys= + block selector                                                                              | Proof                                      |
+| =getRawTransaction=           | =hash=                                                                                                              | =Hex=                                      |
+| =getStorageAt=                | =address slot= + block selector                                                                                     | =Hex | undefined=                          |
+| =getStorageValues=            | =requests: {address: Hex[]}= + block selector                                                                       | ={address: Hex[]}=                         |
+| =getTransaction=              | one of =hash= | =blockHash+index= | =blockNumber+index= | =blockTag+index= | =sender+nonce=                          | Transaction (section 11.3)                 |
+| =getTransactionConfirmations= | =hash= or =transactionReceipt=                                                                                      | =bigint=                                   |
+| =getTransactionCount=         | =address= + block selector                                                                                          | =number=                                   |
+| =getTransactionReceipt=       | =hash=                                                                                                              | Receipt                                    |
+| =multicall=                   | =contracts [{address abi functionName args}] allowFailure? (true) batchSize? deployless? multicallAddress? account? authorizationList? blockOverrides? stateOverride?= + block selector | ={status:'success'|'failure', result|error}[]= or bare results when =allowFailure:false= |
+| =readContract=                | =abi address functionName args? account? factory? factoryData? blockOverrides? stateOverride? code? dataSuffix?= + block selector | decoded return (section 4.4)     |
+| =simulateBlocks=              | =blocks [{calls, blockOverrides?, stateOverrides?}] returnFullTransactions? traceTransfers? validation?= + =blockNumber|blockTag= | (Block & {calls: results})[] |
+| =simulateCalls=               | =calls account? stateOverrides? traceAssetChanges?= + block                                                         | ={assetChanges, block, results}=           |
+| =simulateContract=            | =abi address functionName args? account? chain? value? dataSuffix?= + call fields                                   | ={result, request}= (=request= feeds =writeContract=) |
+| =uninstallFilter=             | =filter=                                                                                                            | =boolean=                                  |
+| =verifyHash=                  | =address hash signature mode? erc6492VerifierAddress? multicallAddress? universalSignatureVerifierAddress? factory? factoryData?= + block | =boolean= (EOA + ERC-1271 + ERC-6492 + ERC-8010) |
+| =verifyMessage=               | =address message signature= + …                                                                                     | =boolean=                                  |
+| =verifyTypedData=             | =address signature domain types primaryType message= + …                                                            | =boolean=                                  |
+| =waitForTransactionReceipt=   | =hash confirmations? (1) pollingInterval? timeout? retryCount? retryDelay? checkReplacement? onReplaced?=            | Receipt; =onReplaced({reason:'cancelled'|'replaced'|'repriced', replacedTransaction, transaction, transactionReceipt})= |
+| =watchBlockHeaders=           | =onBlockHeader onError?= (webSocket/ipc only)                                                                       | =unwatch= fn                               |
+| =watchBlockNumber=            | =onBlockNumber(n, prev) onError? emitMissed? emitOnBegin? poll? pollingInterval?=                                    | =unwatch= fn                               |
+| =watchBlocks=                 | =onBlock(block, prev) onError? blockTag? emitMissed? emitOnBegin? includeTransactions? poll? pollingInterval?=       | =unwatch= fn                               |
+| =watchContractEvent=          | =abi address? eventName? args? fromBlock? strict? onLogs(logs[]) onError? batch? poll? pollingInterval?=            | =unwatch= fn                               |
+| =watchEvent=                  | =address? event? events? args? fromBlock? strict? onLogs(logs[]) onError? batch? poll? pollingInterval?=            | =unwatch= fn                               |
+| =watchPendingTransactions=    | =onTransactions(hashes[]) onError? batch? poll? pollingInterval?=                                                   | =unwatch= fn                               |
+Aliases in =viem/actions=: =getBytecode= → =getCode= (deprecated), =simulate= → =simulateBlocks=
+(deprecated) [DTS]. Both Tier 3.
+
+** 3.2 Wallet actions (26) [DTS actions/wallet/*.d.ts]
+| viem                         | Parameters (viem keys)                                                                                         | Returns                              |
+|------------------------------+----------------------------------------------------------------------------------------------------------------+--------------------------------------|
+| =addChain=                   | =chain= (Chain object) → =wallet_addEthereumChain=                                                             | =void=                               |
+| =deployContract=             | =abi bytecode args? account? chain?= + tx fields                                                               | =Hash=                               |
+| =getAddresses=               | —  (=eth_accounts=)                                                                                            | =Address[]=                          |
+| =getCallsStatus=             | =id= (EIP-5792)                                                                                                | ={status, receipts, …}=              |
+| =getCapabilities=            | =account? chainId?= (EIP-5792)                                                                                 | capabilities map                     |
+| =getPermissions=             | — (=wallet_getPermissions=)                                                                                    | =WalletPermission[]=                 |
+| =prepareAuthorization=       | =account? contractAddress chainId? nonce? executor?= (EIP-7702)                                                | Authorization                        |
+| =prepareTransactionRequest=  | tx request + =account? chain? chainId? nonceManager? parameters? (default ['blobVersionedHashes','chainId','fees','gas','nonce','type'])= | filled request        |
+| =requestAddresses=           | — (=eth_requestAccounts=)                                                                                      | =Address[]=                          |
+| =requestPermissions=         | permissions map (=wallet_requestPermissions=)                                                                  | =WalletPermission[]=                 |
+| =sendCalls=                  | =calls [{to data? value? abi? functionName? args?}] account? chain? capabilities? forceAtomic? id? version? experimental_fallback?= | ={id, capabilities?}=  |
+| =sendCallsSync=              | as above + =timeout?=                                                                                          | calls status                         |
+| =sendRawTransaction=         | =serializedTransaction=                                                                                        | =Hash=                               |
+| =sendRawTransactionSync=     | =serializedTransaction throwOnReceiptRevert? timeout?= (=eth_sendRawTransactionSync=, EIP-7966)                | Receipt                              |
+| =sendTransaction=            | tx request (=to value data gas nonce type accessList authorizationList blobs kzg sidecars= + fee fields) + =account? chain? assertChainId? dataSuffix?= | =Hash=  |
+| =sendTransactionSync=        | as above + =throwOnReceiptRevert? timeout?=                                                                    | Receipt                              |
+| =showCallsStatus=            | =id=                                                                                                           | =void=                               |
+| =signAuthorization=          | = =prepareAuthorization= params                                                                                | SignedAuthorization                  |
+| =signMessage=                | =message (string | {raw: Hex|bytes}) account?=                                                                 | =Hex= (EIP-191)                      |
+| =signTransaction=            | tx request + =account? chain?=                                                                                 | serialized =Hex=                     |
+| =signTypedData=              | =domain types primaryType message account?= (EIP-712)                                                          | =Hex=                                |
+| =switchChain=                | =id= → =wallet_switchEthereumChain=                                                                            | =void=                               |
+| =waitForCallsStatus=         | =id pollingInterval? timeout? status?= (predicate)                                                             | calls status                         |
+| =watchAsset=                 | ={type:'ERC20', options:{address, symbol, decimals, image?}}=                                                  | =boolean=                            |
+| =writeContract=              | =abi address functionName args? account? chain? value? dataSuffix?= + tx fields; accepts =simulateContract().request= | =Hash=                        |
+| =writeContractSync=          | as above + =throwOnReceiptRevert? timeout?=                                                                    | Receipt                              |
+Account resolution [DTS GetAccountParameter]: =account= may be a local Account object
+(signs locally, then =eth_sendRawTransaction=) or an Address / json-rpc account
+(delegates to the transport: =eth_sendTransaction=, =personal_sign=,
+=eth_signTypedData_v4=). If the client has no =account= and the call passes none,
+=AccountNotFoundError= is thrown before any request.
+
+** 3.3 Test actions (30, =createTestClient= / =testActions=) [DTS actions/test/*.d.ts]
+| viem                           | Parameters                              | RPC (anvil / hardhat / ganache prefix by =mode=) | Returns |
+|--------------------------------+-----------------------------------------+---------------------------------------------------+---------|
+| =dropTransaction=              | =hash=                                  | =<mode>_dropTransaction=                          | void    |
+| =dumpState=                    | —                                       | =<mode>_dumpState=                                | Hex     |
+| =getAutomine=                  | —                                       | =<mode>_getAutomine=                              | boolean |
+| =getTxpoolContent=             | —                                       | =txpool_content=                                  | {pending, queued} |
+| =getTxpoolStatus=              | —                                       | =txpool_status=                                   | {pending, queued: number} |
+| =impersonateAccount=           | =address=                               | =<mode>_impersonateAccount=                       | void    |
+| =increaseTime=                 | =seconds (number)=                      | =evm_increaseTime=                                | Hex     |
+| =inspectTxpool=                | —                                       | =txpool_inspect=                                  | map     |
+| =loadState=                    | =state (Hex)=                           | =<mode>_loadState=                                | void    |
+| =mine=                         | =blocks (number) interval? (number)=    | =<mode>_mine= (=evm_mine= on ganache)             | void    |
+| =removeBlockTimestampInterval= | —                                       | =<mode>_removeBlockTimestampInterval=             | void    |
+| =reset=                        | =blockNumber? jsonRpcUrl?=              | =<mode>_reset=                                    | void    |
+| =revert=                       | =id=                                    | =evm_revert=                                      | void    |
+| =sendUnsignedTransaction=      | tx request                              | =eth_sendUnsignedTransaction=                     | Hash    |
+| =setAutomine=                  | =enabled (boolean, positional)=         | =evm_setAutomine=                                 | void    |
+| =setBalance=                   | =address value (bigint)=                | =<mode>_setBalance=                               | void    |
+| =setBlockGasLimit=             | =gasLimit (bigint)=                     | =evm_setBlockGasLimit=                            | void    |
+| =setBlockTimestampInterval=    | =interval (number)=                     | =<mode>_setBlockTimestampInterval=                | void    |
+| =setCode=                      | =address bytecode=                      | =<mode>_setCode=                                  | void    |
+| =setCoinbase=                  | =address=                               | =<mode>_setCoinbase=                              | void    |
+| =setIntervalMining=            | =interval (number)=                     | =evm_setIntervalMining=                           | void    |
+| =setLoggingEnabled=            | =enabled (boolean, positional)=         | =<mode>_setLoggingEnabled=                        | void    |
+| =setMinGasPrice=               | =gasPrice (bigint)=                     | =<mode>_setMinGasPrice=                           | void    |
+| =setNextBlockBaseFeePerGas=    | =baseFeePerGas (bigint)=                | =<mode>_setNextBlockBaseFeePerGas=                | void    |
+| =setNextBlockTimestamp=        | =timestamp (bigint)=                    | =evm_setNextBlockTimestamp=                       | void    |
+| =setNonce=                     | =address nonce (number)=                | =<mode>_setNonce=                                 | void    |
+| =setRpcUrl=                    | =jsonRpcUrl (string, positional)=       | =<mode>_setRpcUrl=                                | void    |
+| =setStorageAt=                 | =address index (number|Hex) value (Hex)= | =<mode>_setStorageAt=                            | void    |
+| =snapshot=                     | —                                       | =evm_snapshot=                                    | Hex id  |
+| =stopImpersonatingAccount=     | =address=                               | =<mode>_stopImpersonatingAccount=                 | void    |
+Note the three positional-scalar actions (=setAutomine=, =setLoggingEnabled=, =setRpcUrl=):
+the CLJS wrapper takes the scalar directly.
+
+** 3.4 ENS actions (5) and SIWE (1) [DTS actions/ens/*, actions/siwe/*]
+| viem              | Parameters                                                                       | Returns            |
+|-------------------+----------------------------------------------------------------------------------+--------------------|
+| =getEnsAddress=   | =name coinType? gatewayUrls? strict? universalResolverAddress?= + =blockNumber|blockTag= | =Address | null= |
+| =getEnsAvatar=    | =name assetGatewayUrls? gatewayUrls? strict? universalResolverAddress?= + block  | =string | null=    |
+| =getEnsName=      | =address gatewayUrls? strict? universalResolverAddress?= + block                 | =string | null=    |
+| =getEnsResolver=  | =name universalResolverAddress?= + block                                         | =Address=          |
+| =getEnsText=      | =name key gatewayUrls? strict? universalResolverAddress?= + block                | =string | null=    |
+| =verifySiweMessage= | =message signature address? domain? nonce? scheme? time?= + block               | =boolean=          |
+All ENS actions require a chain with =contracts.ensUniversalResolver= (mainnet, sepolia,
+holesky …) else =ChainDoesNotSupportContract=; names must be pre-normalized with
+=normalize= (UTS-46) [DOC ens].
+
+* 4. Contracts
+** 4.1 ABI representations [DTS][RUN]
+| Form            | Example                                                                | Accepted by                          |
+|-----------------+------------------------------------------------------------------------+--------------------------------------|
+| JSON ABI        | =[{type:'function', name:'balanceOf', stateMutability:'view', inputs:[{type:'address', name:'owner'}], outputs:[{type:'uint256'}]}]= | every =abi= parameter |
+| human-readable  | =parseAbi(['function balanceOf(address owner) view returns (uint256)', 'event Transfer(address indexed from, address indexed to, uint256 value)', 'struct P { uint256 x; address owner; }', 'function get() view returns (P)'])= | =parseAbi= → JSON ABI; structs are separate signature strings [RUN] |
+| single item     | =parseAbiItem('event Transfer(...)')=, =parseAbiParameters('address, uint256')=  | =event= params of =getLogs= / =watchEvent=, =encodeAbiParameters= |
+=formatAbi= (JSON → human-readable) is an abitype export that viem does NOT re-export;
+viem has =formatAbiItem(item, {includeName?})= (one item → signature string) and
+=formatAbiParams= [RUN 1.3]. JSON ABI keys are camelCase (=stateMutability=,
+=internalType=, =indexed=, =anonymous=) — mechanical kebab translation round-trips.
+Standard ABIs shipped as data: =erc20Abi erc20Abi_bytes32 erc721Abi erc1155Abi
+erc4626Abi multicall3Abi= [RUN].
+
+** 4.2 Codec utilities (=viem/utils/abi=) [DTS]
+| Function                | Signature                                                                | Notes |
+|-------------------------+--------------------------------------------------------------------------+-------|
+| =encodeFunctionData=    | =({abi, functionName?, args?}) → Hex=                                    | =functionName= optional when the ABI has one function; a JS =number= is accepted for =uint256= args [RUN] |
+| =decodeFunctionData=    | =({abi, data}) → {functionName, args}=                                   | selector lookup |
+| =decodeFunctionResult=  | =({abi, functionName?, args?, data}) → value=                            | single output → bare value; multiple outputs → array; named struct → object [RUN] |
+| =encodeFunctionResult=  | =({abi, functionName?, result}) → Hex=                                   |       |
+| =decodeEventLog=        | =({abi, data?, topics, eventName?, strict? (true)}) → {eventName, args}= | named params → object; unnamed → array [RUN]; =strict:false= tolerates missing data |
+| =encodeEventTopics=     | =({abi, eventName?, args?}) → Hex[]=                                     |       |
+| =parseEventLogs=        | =({abi, logs, eventName?, args?, strict? (true)}) → Log[]=               | filters + decodes raw logs (e.g. from a receipt) |
+| =decodeErrorResult=     | =({abi, data}) → {abiItem, errorName, args}=                             | custom errors + =Error(string)= + =Panic(uint256)= |
+| =encodeErrorResult=     | =({abi, errorName?, args?}) → Hex=                                       |       |
+| =encodeAbiParameters=   | =(params, values) → Hex=                                                 | positional |
+| =decodeAbiParameters=   | =(params, data) → values[]=                                              |       |
+| =encodePacked=          | =(types, values) → Hex=                                                  | =abi.encodePacked= |
+| =encodeDeployData=      | =({abi, bytecode, args?}) → Hex=                                         |       |
+| =decodeDeployData=      | =({abi, bytecode, data}) → {args, bytecode}=                             |       |
+| =getAbiItem=            | =({abi, name, args?}) → item=                                            | overload resolution by args |
+| =formatAbiItem=         | =(item, {includeName?}) → string=                                        |       |
+| =toFunctionSelector= / =toEventSelector= / =toFunctionSignature= / =toEventSignature= / =toFunctionHash= / =toEventHash= | string or ABI item → Hex / string | |
+
+** 4.3 Contract actions (client-taking) [DTS]
+=readContract= (=eth_call= + decode), =simulateContract= (=eth_call= → ={result, request}=),
+=writeContract= (=sendTransaction= with encoded data), =estimateContractGas=,
+=deployContract= (=sendTransaction= with =encodeDeployData=), =multicall= (Multicall3
+=aggregate3=; needs =chain.contracts.multicall3= or =multicallAddress=, or =deployless:true=),
+=getContractEvents= (=eth_getLogs= + decode), =createContractEventFilter=,
+=watchContractEvent= — all in section 3.1/3.2.
+Revert decoding [RUN]: a revert with custom-error data yields the chain
+=ContractFunctionExecutionError > ContractFunctionRevertedError > CallExecutionError >
+ExecutionRevertedError > UnknownRpcError > Error=; the =ContractFunctionRevertedError=
+carries =data = {abiItem, errorName, args}= (decoded against the call's ABI), =reason=
+(for =Error(string)= reverts), =signature=, =raw=. Empty return data yields
+=ContractFunctionExecutionError > ContractFunctionZeroDataError > AbiDecodingZeroDataError=
+(typical "no contract at address"). Argument validation errors (e.g. =InvalidAddressError=)
+are thrown *before* the request with no cause chain.
+
+** 4.4 =getContract= (bound instance) [DTS actions/getContract.d.ts][RUN]
+=getContract({address, abi, client})= where =client= is a Client or ={public, wallet}=.
+Returns ={address, abi, read, simulate, estimateGas, write, createEventFilter, getEvents,
+watchEvent}= whose members are JavaScript *Proxies*: =Object.keys(contract.read)= is
+empty; =contract.read.balanceOf([args], options?)= resolves lazily to
+=readContract(client, {...})= [RUN]. Because the value is a Proxy of closures it cannot
+be turned into data; viem-cljs provides the equivalent as a plain map
+=(contract/get-contract client {:address .. :abi ..})= → ={:client :address :abi}=,
+consumed by =contract/read!= / =write!= / =simulate!= / =estimate-gas!= / =events!= /
+=events/watch-contract-event!= (section 11.1). APPROVED 2026-09-25. viem's Proxy
+=getContract= itself is Tier 3.
+
+** 4.5 =deployContract= parameters [DTS]
+=abi=, =bytecode= (Hex), =args= (constructor args; required iff the ABI has a
+constructor with inputs), =account=, =chain=, plus any tx fields (=gas=, fee fields,
+=nonce=, =value= for payable constructors). Returns the tx hash; the deployed address
+is =contractAddress= on the receipt (=waitForTransactionReceipt=).
+
+* 5. Accounts (=viem/accounts=) [DTS accounts/*.d.ts][RUN]
+** 5.1 Factories
+| Function              | Signature                                                                   | Result =type= / =source= | Extra members |
+|-----------------------+-----------------------------------------------------------------------------+--------------------------+---------------|
+| =privateKeyToAccount= | =(privateKey: Hex, {nonceManager?})=                                        | =local= / =privateKey=   | =address publicKey sign signAuthorization signMessage signTransaction signTypedData nonceManager= [RUN] |
+| =mnemonicToAccount=   | =(mnemonic, {accountIndex?, addressIndex?, changeIndex?, path?, passphrase?, nonceManager?})= | =local= / =hd= | + =getHdKey()=; default path =m/44'/60'/${accountIndex}'/${changeIndex}/${addressIndex}=; explicit =path= must start with =m/44'/60'/= [DTS HDOptions] |
+| =hdKeyToAccount=      | =(HDKey, same options)=                                                     | =local= / =hd=           | =HDKey.fromMasterSeed / fromExtendedKey / fromJSON= (from @scure/bip32) [RUN] |
+| =toAccount=           | =(address)= → json-rpc account; =({address, signMessage, signTransaction, signTypedData, sign?, signAuthorization?, nonceManager?})= → custom local account | =json-rpc= / — or =local= / =custom= | the CLJS "custom signer" hook (fns returning promises of Hex) |
+| =parseAccount=        | =(Address | Account)= → Account (=\{address, type:'json-rpc'\}= for a string) [RUN] | | |
+| =generatePrivateKey=  | =() → Hex= (32 bytes, CSPRNG)                                               |                          | |
+| =generateMnemonic=    | =(wordlist, strength? (128))= → 12 words [RUN]; wordlists =english czech french italian japanese korean portuguese simplifiedChinese spanish traditionalChinese= | | |
+| =privateKeyToAddress= / =publicKeyToAddress= | =(Hex) → Address=                                            |                          | |
+| =createNonceManager= / =nonceManager= | ={source: jsonRpc()}= — per-address nonce tracking for concurrent sends | | pass as =nonceManager= to factories |
+Standalone signers (no client): =sign({hash, privateKey, to?})=, =signMessage({message, privateKey})=,
+=signTransaction({transaction, privateKey, serializer?})=, =signTypedData({..., privateKey})=,
+=signAuthorization({..., privateKey})=, =serializeSignature=, =signatureToHex= (deprecated alias),
+=setSignEntropy=.
+=localAccountJson= (mentioned in the brief) does NOT exist in viem [RUN]; keystore
+support is added by viem-cljs itself — section 5.3 and uncertainty 12.14 (decided).
+** 5.2 House rule for key material
+Tests use only the public fixtures in =test/viem_cljs/test_util.cljs=. The phase-5 smoke
+generates a private key in-process with =generatePrivateKey= (or reads anvil's
+well-known dev accounts on a local anvil), never prints or persists it, and the
+=accounts/account->map= projection exposes =address type source= only — the wrapper never
+puts key material into =ex-info= data, logs, or maps (=util/config-error= docstring).
+
+** 5.3 Keystore JSON (Web3 Secret Storage v3) — DECIDED 2026-09-25: add it
+viem has no keystore API. Its dependency ox exposes =ox/Keystore=: =decrypt(keystore, key,
+{as?})=, =toKey({password, kdf?, iv?, salt?, …})= / =toKeyAsync=, =scrypt= / =pbkdf2=
+derivers, =encrypt=; the keystore type is =\{crypto: {cipher:'aes-128-ctr', ciphertext,
+cipherparams: {iv}, kdf: 'scrypt'|'pbkdf2', kdfparams: {dklen n p r salt} | {c dklen
+prf:'hmac-sha256' salt}, mac}, id, version: 3\}= [DTS ox/_types/core/Keystore.d.ts].
+House position: =accounts/account-from-keystore!= =(json-or-map password)= → promise of a
+local account, implemented in the binding layer with Node's built-in =crypto=
+(=scrypt= / =pbkdf2= per =kdf=, MAC check =keccak256(derived[16..32] ++ ciphertext)= via
+viem's =keccak256=, =aes-128-ctr= decipher with =derived[0..16]= and =iv=) and
+=privateKeyToAccount= — zero dependencies beyond viem, Node only. Requiring =ox/Keystore=
+directly is the fallback if the hand-written path proves fragile, at the cost of an
+undeclared transitive dependency (ox is pinned by viem but hoisting is package-manager
+dependent). The decrypted key never leaves the binding fn (no logging, not kept in the
+returned map: =account->map= shows =address type source= only). Keystore *encryption* is
+not requested and stays Tier 2.
+
+* 6. Chains (=viem/chains=)
+** 6.1 Registry census [RUN]
+| Metric                                       | Value                                                         |
+|----------------------------------------------+---------------------------------------------------------------|
+| exports (all plain objects with =id=)        | 737                                                           |
+| distinct chain ids                           | 709 (28 alias names, e.g. =foundry= / =anvil= / =hardhat= all id 31337; =zkSync=/=zksync=) |
+| =testnet: true=                              | 337 (400 mainnets/unflagged; =localhost= id 1337 is unflagged) |
+| with =formatters= / =serializers=            | 87 / 85 (OP Stack, ZKsync, Celo, Tempo … custom tx/receipt fields) |
+| with =sourceId= (L2 → L1 id)                 | 69                                                            |
+| with =custom= / =fees= / =blockTime=         | 19 / 7 / 119                                                  |
+| =ensTld=                                     | 0 (field renamed =ensTlds=, unused)                           |
+Spot checks: =mainnet 1=, =sepolia 11155111=, =holesky 17000=, =hoodi 560048=, =base 8453=,
+=baseSepolia 84532=, =optimism 10=, =arbitrum 42161=, =polygon 137=, =bsc 56=, =avalanche 43114=,
+=gnosis 100=, =scroll 534352=, =zora 7777777=, =zksync 324=, =celo 42220=, =linea 59144=,
+=tempo 4217=, =foundry/anvil/hardhat 31337= (=http://127.0.0.1:8545=, =ws://127.0.0.1:8545=),
+=localhost 1337=.
+** 6.2 Chain object shape [DTS types/chain.d.ts][RUN]
+Required: =id (number) name nativeCurrency {name symbol decimals} rpcUrls {default: {http: string[], webSocket?: string[]}, [key]: …}=.
+Optional: =blockExplorers {default: {name url apiUrl?}}=, =contracts {multicall3 ensRegistry
+ensUniversalResolver erc6492Verifier [name]: {address blockCreated?} | {[sourceId]: …}}=,
+=blockTime=, =testnet=, =sourceId=, =ensTlds=, =experimental_preconfirmationTime=,
+=supportsTransactionReplacementDetection=, and the =ChainConfig= part: =formatters {block
+transaction transactionReceipt transactionRequest: {type format exclude?}}=, =serializers
+{transaction transactionEnvelope}=, =fees {baseFeeMultiplier maxPriorityFeePerGas
+defaultPriorityFee estimateFeesPerGas}=, =prepareTransactionRequest=, =verifyHash=, =custom=,
+=extendSchema=. Every registry object also has an =extend= *function* and the keys
+=formatters fees serializers= present-but-undefined [RUN] — chain objects are NOT pure
+data (functions inside for 87 of them). mainnet's default RPC is
+=https://ethereum.reth.rs/rpc= (public, rate-limited).
+** 6.3 =defineChain= and helpers [DTS utils/chain]
+=defineChain(chain)= → the same object with =extend= attached (pure, no validation beyond
+types). =extractChain({chains, id})= picks by id; =getChainContractAddress({chain,
+contract, blockNumber?})= throws =ChainDoesNotSupportContract= when absent;
+=assertCurrentChain({chain, currentChainId})= throws =ChainMismatchError=.
+
+* 7. Utilities (=viem/utils=, 158 exports) [DTS][RUN]
+| Group        | Functions (viem)                                                                                                                                       | Tier |
+|--------------+--------------------------------------------------------------------------------------------------------------------------------------------------------+------|
+| units        | =formatUnits(bigint, decimals) → string=, =parseUnits(string, decimals) → bigint= (a JS number input throws TypeError [RUN]), =parseEther(string, unit?)=, =formatEther(bigint, unit?)=, =parseGwei=, =formatGwei=; constants =etherUnits gweiUnits weiUnits= | 1 |
+| address      | =getAddress(address, chainId?)= (checksum; throws =InvalidAddressError=), =checksumAddress=, =isAddress(s, {strict? (true)})= (strict rejects a wrong checksum [RUN]), =isAddressEqual=, =getContractAddress({from, nonce} | {bytecode|bytecodeHash, from, salt, opcode:'CREATE2'})=, =getCreateAddress=, =getCreate2Address= | 1 |
+| hash         | =keccak256(hex|bytes, to?)=, =sha256=, =ripemd160=, =hashMessage(message, to?)= (EIP-191), =hashTypedData({domain types primaryType message})=, =hashDomain=, =hashStruct=, =toFunctionSelector toEventSelector toFunctionSignature toEventSignature toFunctionHash toEventHash=, =isHash=; deprecated =getFunctionSelector getEventSelector getFunctionSignature getEventSignature= | 1 (deprecated → 3) |
+| signature    | =recoverAddress({hash, signature})=, =recoverMessageAddress({message, signature})=, =recoverTypedDataAddress=, =recoverPublicKey=, =recoverTransactionAddress=, =verifyMessage({address, message, signature})=, =verifyTypedData=, =verifyHash= (pure EOA versions — all return Promises), =parseSignature(Hex) → {r s v? yParity}= (a plain =Error= on bad input [RUN]), =serializeSignature({r s v? yParity}, to?)=, compact: =parseCompactSignature serializeCompactSignature compactSignatureToSignature signatureToCompactSignature hexToCompactSignature compactSignatureToHex hexToSignature=; ERC-6492/8010: =isErc6492Signature parseErc6492Signature serializeErc6492Signature isErc8010Signature parseErc8010Signature serializeErc8010Signature= | 1 |
+| encoding     | =toHex(string|number|bigint|boolean|bytes, {size?})=, =numberToHex stringToHex bytesToHex boolToHex=, =fromHex(hex, 'string'|'bigint'|'number'|'bytes'|'boolean' | {to, size})=, =hexToBigInt hexToNumber hexToString hexToBytes hexToBool=, =toBytes fromBytes numberToBytes stringToBytes boolToBytes bytesToBigInt bytesToNumber bytesToString bytesToBool=, =toRlp fromRlp hexToRlp bytesToRlp= | 1 |
+| data         | =concat concatHex concatBytes=, =pad padHex padBytes ({dir:'left'|'right', size})=, =slice sliceHex sliceBytes (value, start?, end?, {strict?})=, =size=, =trim ({dir})=, =isHex(v, {strict? (true)})=, =isBytes= | 1 |
+| transaction  | =serializeTransaction(tx, signature?) → Hex=, =parseTransaction(Hex)=, =getTransactionType(tx)= (='legacy'|'eip2930'|'eip1559'|'eip4844'|'eip7702'=), =getSerializedTransactionType=, =assertTransactionEIP1559 assertTransactionEIP2930 assertTransactionLegacy=, =serializeAccessList=, =serializeAuthorizationList= | 1 |
+| typed data   | =validateTypedData=, =serializeTypedData=, =getTypesForEIP712Domain=, =domainSeparator=                                                                     | 1 |
+| authorization | =hashAuthorization=, =verifyAuthorization=, =recoverAuthorizationAddress= (EIP-7702)                                                                     | 1 |
+| ens          | =namehash=, =labelhash=, =normalize= (=viem/ens=), =packetToBytes=, =parseAvatarRecord=, =toCoinType=                                                        | 1 (first three) |
+| chain        | =defineChain extractChain getChainContractAddress assertCurrentChain=                                                                                       | 1 (chains ns) |
+| blobs (4844) | =toBlobs fromBlobs toBlobSidecars blobsToCommitments blobsToProofs commitmentToVersionedHash commitmentsToVersionedHashes sidecarsToVersionedHashes setupKzg defineKzg= | 2 (needs a KZG implementation) |
+| formatters   | =formatBlock formatTransaction formatTransactionReceipt formatTransactionRequest formatLog defineBlock defineTransaction defineTransactionReceipt defineTransactionRequest defineFormatter extract= | 3 (internal) |
+| rpc/misc     | =getHttpRpcClient getSocketRpcClient getWebSocketRpcClient getSocket ccipFetch ccipRequest ccipReadTunnel offchainLookup buildRequest getAction stringify withCache withRetry withTimeout= | 3 (=stringify= — BigInt-safe JSON — Tier 1) |
+| constants    | =zeroAddress zeroHash ethAddress maxUint256 … minInt8 … presignMessagePrefix=                                                                               | 1 (as data) |
+Observed values [RUN]: =formatUnits(1234567n, 6)= → ="1.234567"=; =parseEther("1")= →
+=1000000000000000000n=; =keccak256("0x")= → =0xc5d2…a470=; =toHex(1n)= → ="0x1"=,
+=toHex("a")= → ="0x61"=; =isHex("0x1")= → true (odd length allowed by default).
+ERC-20/721/1155/4626 helpers: viem ships only the ABIs (section 4.1) and, since 2.5x, the
+=viem/tokens= module + =client.token= action group (=token= object export in
+=viem/actions=) — no dedicated =erc20.transfer()= style wrappers in the main surface.
+
+* 8. Events, watchers and filters → core.async design
+** 8.1 viem semantics [DTS][DOC]
+| Watcher                    | Emits                                          | Transport behaviour                                                                                      |
+|----------------------------+------------------------------------------------+----------------------------------------------------------------------------------------------------------|
+| =watchBlockNumber=         | =onBlockNumber(bigint, prev)=                  | webSocket/ipc: =eth_subscribe newHeads= unless =poll:true=; http: polls =eth_blockNumber= every =pollingInterval=; =emitOnBegin=, =emitMissed= (polling only) |
+| =watchBlocks=              | =onBlock(block, prev)=                         | as above (+ =eth_getBlockByNumber=), =includeTransactions=, =blockTag= (polling only)                     |
+| =watchBlockHeaders=        | =onBlockHeader(header, prev)=                  | webSocket/ipc ONLY (=newHeads=); throws on http                                                          |
+| =watchEvent=               | =onLogs(Log[])= batches                        | webSocket/ipc: =eth_subscribe logs= (with =strict=/=event= decoding); http: =eth_newFilter= + =eth_getFilterChanges=, falling back to =eth_getLogs= per block range when filters are unsupported; =fromBlock= |
+| =watchContractEvent=       | =onLogs(Log[])= (decoded =args eventName=)     | same as =watchEvent=, ABI-driven                                                                         |
+| =watchPendingTransactions= | =onTransactions(Hash[])= batches               | webSocket/ipc: =newPendingTransactions=; http: =eth_newPendingTransactionFilter= polling; =batch= (default true) |
+| =waitForTransactionReceipt= | resolves once; =onReplaced= callback          | =watchBlockNumber= internally; =timeout=, =confirmations=                                                |
+All return an =unwatch= thunk; =onError= receives transport/poll errors (the watcher keeps
+running). Filters (=createEventFilter= etc. + =getFilterChanges= / =getFilterLogs= /
+=uninstallFilter=) are the manual pull alternative (server-side filter ids).
+** 8.2 core.async mapping (APPROVED 2026-09-25, section 11.1 =viem-cljs.events=)
+- Each =watch-*!= fn returns ONE core.async channel. Values are tagged maps, one event per
+  put: ={:event :block-number :block-number 100N :prev 99N}=, ={:event :block :block {...}}=,
+  ={:event :block-header :header {...}}=, ={:event :log :log {...}}= (viem's =onLogs= batch of
+  n logs → n puts, in order), ={:event :pending-transaction :hash "0x…"}= (batch → n puts),
+  ={:event :error :error <ex-info>}= (channel stays open — mirrors viem).
+- Unsubscribe = =(events/stop! ch)=: calls viem's =unwatch= and closes the channel. Closing
+  the channel from the consumer side also unsubscribes: the producer uses =put!= with a
+  callback and, on the first =false= return (channel closed), calls =unwatch= (so
+  =(async/close! ch)= is enough).
+- Buffering: default =(async/chan 1024)=, overridable with =:buf= (any buffer / number). A
+  dropping or sliding buffer is the caller's choice for high-volume log streams
+  (uncertainty 12.4).
+- =:poll?=, =:polling-interval=, =:emit-on-begin?=, =:emit-missed?=, =:batch?= pass
+  through as viem options (boolean kebab keys with =?= stripped to viem names).
+- =wait-for-transaction-receipt!= stays a promise (single result); its =on-replaced= becomes
+  an optional CLJS callback receiving a kebab map.
+
+* 9. Error taxonomy (=viem/errors=, 144 classes) [DTS][RUN]
+** 9.1 =BaseError= [DTS errors/base.d.ts]
+All viem errors extend =BaseError extends Error= with: =name= (class name),
+=shortMessage=, =details= (string), =metaMessages?= (string[]), =docsPath?=, =version=
+("2.56.9"), =cause?=, and =walk()= (→ deepest cause) / =walk(fn)= (→ first error in the
+=cause= chain for which =fn= is truthy, or null). =message= is the multi-line render
+(=shortMessage= + details + docs URL + "Version: viem@2.56.9") [RUN]. Own enumerable
+keys: =details docsPath metaMessages shortMessage version name= (+ =cause= when present).
+** 9.2 Families (class name suffix → meaning)
+| Family                | Classes (144 total)                                                                                                                                                  |
+|-----------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| ABI codec (25)        | =AbiConstructorNotFoundError AbiConstructorParamsNotFoundError AbiDecodingDataSizeInvalidError AbiDecodingDataSizeTooSmallError AbiDecodingZeroDataError AbiEncodingArrayLengthMismatchError AbiEncodingBytesSizeMismatchError AbiEncodingLengthMismatchError AbiErrorInputsNotFoundError AbiErrorNotFoundError AbiErrorSignatureNotFoundError AbiEventNotFoundError AbiEventSignatureEmptyTopicsError AbiEventSignatureNotFoundError AbiFunctionNotFoundError AbiFunctionOutputsNotFoundError AbiFunctionSignatureNotFoundError AbiItemAmbiguityError BytesSizeMismatchError DecodeLogDataMismatch DecodeLogTopicsMismatch InvalidAbiDecodingTypeError InvalidAbiEncodingTypeError InvalidArrayError InvalidDefinitionTypeError UnsupportedPackedAbiType= |
+| account (3)           | =AccountNotFoundError AccountTypeNotSupportedError AccountStateConflictError=                                                                                        |
+| address (1)           | =InvalidAddressError=                                                                                                                                                |
+| block/tx lookup (4)   | =BlockNotFoundError TransactionNotFoundError TransactionReceiptNotFoundError WaitForTransactionReceiptTimeoutError=                                                  |
+| chain (6)             | =ChainDoesNotSupportContract ChainMismatchError ChainNotFoundError ClientChainNotConfiguredError InvalidChainIdError UnsupportedChainIdError=                          |
+| contract (5)          | =CallExecutionError ContractFunctionExecutionError ContractFunctionRevertedError ContractFunctionZeroDataError RawContractError CounterfactualDeploymentFailedError=   |
+| data/encoding (13)    | =IntegerOutOfRangeError InvalidBytesBooleanError InvalidBytesLengthError InvalidHexBooleanError InvalidHexValueError InvalidStorageKeySizeError SizeExceedsPaddingSizeError SizeOverflowError SliceOffsetOutOfBoundsError NegativeOffsetError PositionOutOfBoundsError InvalidDecimalNumberError RecursiveReadLimitExceededError= |
+| ens (6)               | =EnsAvatarInvalidMetadataError EnsAvatarInvalidNftUriError EnsAvatarUnsupportedNamespaceError EnsAvatarUriResolutionError EnsInvalidChainIdError OffchainLookup*= (3) |
+| fee/nonce/gas (16)    | =BaseFeeScalarError Eip1559FeesNotSupportedError MaxFeePerGasTooLowError FeeCapTooHighError FeeCapTooLowError FeeConflictError FeePayerNonceMismatchError InsufficientFundsError IntrinsicGasTooHighError IntrinsicGasTooLowError NonceMaxValueError NonceTooHighError NonceTooLowError TipAboveFeeCapError ExecutionRevertedError UnknownNodeError= (the "node error" family that viem *classifies from RPC messages*) |
+| transaction (12)      | =TransactionExecutionError EstimateGasExecutionError TransactionTypeNotSupportedError InvalidSerializableTransactionError InvalidSerializedTransactionError InvalidSerializedTransactionTypeError InvalidLegacyVError InvalidYParityError InvalidStructTypeError TransactionReceiptRevertedError= (=throwOnReceiptRevert=) =FilterTypeNotSupportedError= |
+| blob / rlp (8)        | =BlobSizeTooLargeError EmptyBlobError InvalidVersionedHashSizeError InvalidVersionedHashVersionError RlpDepthLimitExceededError RlpListBoundaryExceededError RlpTrailingBytesError= |
+| typed data / siwe (5) | =InvalidDomainError InvalidPrimaryTypeError InvalidTypedDataTypeError SiweInvalidMessageFieldError Eip712DomainNotFoundError=                                        |
+| RPC / JSON-RPC (16)   | =RpcError= (=code=), =ParseRpcError -32700=, =InvalidRequestRpcError -32600=, =MethodNotFoundRpcError -32601=, =InvalidParamsRpcError -32602=, =InternalRpcError -32603=, =InvalidInputRpcError -32000=, =ResourceNotFoundRpcError -32001=, =ResourceUnavailableRpcError -32002=, =TransactionRejectedRpcError -32003=, =MethodNotSupportedRpcError -32004=, =LimitExceededRpcError -32005=, =JsonRpcVersionUnsupportedError -32006=, =UnknownRpcError=, =RpcRequestError=, =TimeoutError= |
+| EIP-1193 provider (7) | =ProviderRpcError= (+ =data=), =UserRejectedRequestError 4001=, =UnauthorizedProviderError 4100=, =UnsupportedProviderMethodError 4200=, =ProviderDisconnectedError 4900=, =ChainDisconnectedError 4901=, =SwitchChainError 4902= |
+| transport (6)         | =HttpRequestError= (=status body url headers=), =WebSocketRequestError=, =SocketClosedError=, =UrlRequiredError=, =ResponseBodyTooLargeError=, =TimeoutError=        |
+| EIP-5792 / calls (7)  | =AtomicityNotSupportedError AtomicReadyWalletRejectedUpgradeError BundleFailedError BundleTooLargeError DuplicateIdError UnknownBundleIdError UnsupportedNonOptionalCapabilityError WalletConnectSessionSettlementError= |
+** 9.3 Cause chains observed [RUN]
+| Scenario                                  | Chain (outermost → root)                                                                                              |
+|-------------------------------------------+-----------------------------------------------------------------------------------------------------------------------|
+| RPC method missing                        | =MethodNotFoundRpcError(-32601) > Error(-32601)=                                                                        |
+| =estimateGas= with RPC error -32000       | =EstimateGasExecutionError > InvalidInputRpcError(-32000) > Error=; =walk(e => e.name === 'InvalidInputRpcError')= finds it |
+| =readContract=, custom-error revert       | =ContractFunctionExecutionError > ContractFunctionRevertedError > CallExecutionError > ExecutionRevertedError > UnknownRpcError > Error=; reverted =.data = {abiItem, errorName, args}= |
+| =readContract=, =0x= return data          | =ContractFunctionExecutionError > ContractFunctionZeroDataError > AbiDecodingZeroDataError=                            |
+| =simulateContract=, bad stub data         | =ContractFunctionExecutionError > InvalidBytesBooleanError=                                                            |
+| =getAddress("0x123")=, ABI arg validation | =InvalidAddressError= (no cause; thrown before any request)                                                            |
+=ContractFunctionExecutionError= adds =abi args contractAddress formattedArgs functionName sender=;
+=CallExecutionError= adds the call fields; =RpcError= adds =code=; =HttpRequestError= adds
+=status body url headers=.
+** 9.4 Errors from viem's dependencies [RUN]
+Not every throw is a =BaseError=: =parseEther("1.5.5")= throws ox's
+=Value.InvalidDecimalNumberError= (name with a =Value.= prefix, no =shortMessage=, no
+=walk=); =parseAbi(["function bad("])= throws abitype's =UnknownSignatureError= (has
+=shortMessage details=, no =walk=); =parseSignature("0x12")= throws a plain =Error=;
+=hexToNumber("0xzz")= throws a =SyntaxError= from =BigInt()=. The wrapper (section 9.5)
+therefore never assumes =walk= and falls back to =message=.
+** 9.5 Mapping to the CLJS design (implemented in phase 0, =viem-cljs.util=)
+Every rejection/throw crossing the boundary becomes =ex-info= with
+={:type :viem-cljs/viem-error :name "ContractFunctionExecutionError" :short-message
+".." :details ".." :meta-messages [..] :docs-path ".." :version ".." :code -32000
+:causes [{:name .. :short-message .. :message .. :details .. :code ..} …] :root {..}
+:action :read-contract :cause <raw JS error>}=. =util/error-causes= gives the name
+chain; =util/error-cause?= is the CLJS =walk= (=(util/error-cause? e
+"ContractFunctionRevertedError")=). Phase 3 adds =viem-cljs.errors= accessors:
+=revert-data= (decoded ={:error-name :args :abi-item}= from the reverted cause),
+=rpc-code=, =user-rejected?=, =insufficient-funds?=, =nonce-too-low?=, =timeout?=,
+=http-status=. Pre-request validation done by viem-cljs itself raises
+=:viem-cljs/argument-error=; client/chain/transport setup problems
+=:viem-cljs/config-error=.
+
+* 10. Coverage tiers (decided)
+** Tier 1 — complete wrap in phases 2–4 (the "complete wrapper" claim)
+- Clients: =createClient createPublicClient createWalletClient createTestClient=, all
+  =ClientConfig= keys, =client.request=. Transports: =http webSocket fallback custom ipc=
+  with every documented config key.
+- Chains: the whole registry by keyword/id, =defineChain=, =extractChain=,
+  =getChainContractAddress=, chain → data projection.
+- Actions: all 51 public, 26 wallet, 30 test, 5 ens, 1 siwe (=verifySiweMessage=) —
+  minus the two deprecated aliases (=getBytecode=, =simulate=), which are Tier 3.
+- Accounts: =privateKeyToAccount mnemonicToAccount hdKeyToAccount toAccount parseAccount
+  generatePrivateKey generateMnemonic privateKeyToAddress publicKeyToAddress
+  createNonceManager= + standalone =sign signMessage signTransaction signTypedData
+  signAuthorization serializeSignature= + the 10 wordlists as data + keystore v3
+  decryption (=account-from-keystore!=, section 5.3 — viem-cljs's own, decided).
+- Contracts: every ABI codec in section 4.2, =parseAbi*=, =formatAbiItem=, the standard
+  ABIs as data, the contract actions, a data-based bound contract (=contract/get-contract=).
+- Utilities: units, address, hash, signature (incl. compact + ERC-6492/8010), encoding,
+  data, transaction, typed data, authorization, ens hashing, constants, =stringify=.
+- Events: the six watchers as channels, filters as promises.
+- Errors: the ex-info envelope + accessors (section 9.5).
+Rationale: this is exactly viem's documented main surface (viem.sh "Public/Wallet/Test
+Actions", "Contract", "Accounts", "Chains", "Utilities", "Clients & Transports") and
+everything a Node client needs; nothing here requires an extra dependency.
+** Tier 2 — wrap later / partially (with the reason)
+| Module / feature                          | Why later                                                                                                              |
+|-------------------------------------------+------------------------------------------------------------------------------------------------------------------------|
+| =viem/siwe= message builders (5 fns)      | pure string/EIP-4361 helpers; small, add after core (verify action is Tier 1)                                          |
+| =viem/tokens=, =client.token= actions     | new (2.5x) token abstraction over ERC-20 + Tempo TIP-20; API still moving; the plain ERC-20 path (=erc20Abi= + =read!=/=write!=) is Tier 1 |
+| ENS extras (=parseAvatarRecord packetToBytes toCoinType=) | niche; the 5 ENS actions and =namehash labelhash normalize= are Tier 1                                 |
+| EIP-4844 blob helpers (=toBlobs= … =setupKzg=) | need a KZG implementation the consumer must supply (=c-kzg= / =kzg-wasm=), outside the zero-extra-deps rule       |
+| =viem/experimental= (EIP-5792/7702/7715/7739/7811/7821/7846/7895 decorators) | the stable parts (=sendCalls= family, =signAuthorization=) already live in wallet actions (Tier 1); the rest is marked experimental upstream |
+| =viem/account-abstraction= (ERC-4337)     | separate client kinds (bundler, paymaster), smart-account factories, 29 own errors — a self-contained second wrapper (own inventory) |
+| =viem/op-stack=, =viem/zksync=, =viem/celo=, =viem/linea=, =viem/tempo= | chain-specific action sets (deposits/withdrawals, EIP-712 txs); their chain objects and formatters already work through Tier 1 clients |
+| =fallback= transport =rank= tuning, =http= =fetchFn=/=fetchOptions=, =webSocket= =keepAlive=/=reconnect= objects | pass-through in Tier 1 (opaque maps), typed docs later                                                        |
+** Tier 3 — not wrapped
+| Item                                                                      | Reason                                                       |
+|---------------------------------------------------------------------------+--------------------------------------------------------------|
+| decorated client methods (=client.getBlock()=), =publicActions= etc.     | same functions as =viem/actions=; the CLJS API is the tree-shakable shape |
+| =getContract= Proxy instances                                            | not data; replaced by =contract/get-contract= map + explicit fns |
+| deprecated aliases: =getBytecode=, =simulate=, =getFunctionSelector getEventSelector getFunctionSignature getEventSignature=, =signatureToHex=, =bytesToBigint= | deprecated upstream |
+| internal utils (24 in 1.3: formatters, =buildRequest getAction get*Error= rpc clients, regexes) | implementation details                            |
+| =viem/window=                                                             | TypeScript types only, browser-only                          |
+| =createTransport=, =rpcSchema=, =setErrorConfig=, =extendSchema=          | library-author hooks                                         |
+| =withCache withRetry withTimeout=                                          | generic promise helpers; promesa covers them                  |
+
+* 11. Implementation outline for phases 2–4
+** 11.1 Namespaces and public functions
+Rule: only =viem-cljs.util= and =viem-cljs.binding= contain JS interop; every other
+namespace is plain ClojureScript calling those two.
+| Namespace                | Phase | Public fns (proposal)                                                                                                                                                                      |
+|--------------------------+-------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| =viem-cljs.util=         | 0 ✓   | =kebab->camel camel->kebab transform-keys enum-value bigint? ->bigint bigint->number bigint->string ->js ->clj jsget viem-error config-error argument-error error-data error-type error-name error-causes error-cause?= |
+| =viem-cljs.binding=      | 2     | the interop layer: =(:require ["viem" ...] ["viem/actions" ...] ["viem/accounts" ...] ["viem/chains" ...] ["viem/utils" ...] ["viem/ens" ...] ["viem/node" ...])=; =transport=, =client=, =chain-object=, =account-object=, =invoke!= (action name + client + kebab opts → promesa promise of =->clj= result, rejections wrapped), =invoke= (sync util), =watch= (watcher name → channel plumbing) |
+| =viem-cljs.core=         | 2     | =http web-socket fallback custom ipc= (transport specs), =client public-client wallet-client test-client= (=:transport :chain :account :batch :cache-time :polling-interval :ccip-read :data-suffix :key :name :mode=), =request!= (raw JSON-RPC), =client-info= (=:chain-id :chain :account-address :transport-type :key :name=), =client?= |
+| =viem-cljs.chains=       | 2     | =chain= (keyword | id | kebab map → chain), =chains= (all keywords), =chain-ids=, =by-id=, =chain->map=, =define-chain=, =extract-chain=, =contract-address=, =testnet?=, =rpc-url=, =ws-url=, =explorer-url=, =native-currency= |
+| =viem-cljs.accounts=     | 2     | =generate-private-key generate-mnemonic private-key->account mnemonic->account hd-key->account custom-account address-account account-from-keystore! parse-account account->map private-key->address public-key->address nonce-manager sign-message sign-typed-data sign-transaction sign-authorization sign-hash serialize-signature wordlists= (local signing is pure: no =!=) |
+| =viem-cljs.actions=      | 3     | 51 public + 26 wallet + 5 ens + 1 siwe as =<kebab-name>!= (=get-block! get-balance! call! estimate-gas! read-contract! simulate-contract! multicall! send-transaction! write-contract! deploy-contract! sign-message! sign-typed-data! wait-for-transaction-receipt! get-ens-address! …=), watchers excluded (events ns) |
+| =viem-cljs.test-actions= | 3     | the 30 anvil/hardhat actions: =mine! set-balance! impersonate-account! stop-impersonating-account! increase-time! set-next-block-timestamp! snapshot! revert! reset! set-code! set-storage-at! set-nonce! set-automine! get-automine! drop-transaction! dump-state! load-state! …= |
+| =viem-cljs.contract=     | 3     | =parse-abi parse-abi-item parse-abi-parameters format-abi-item encode-function-data decode-function-data decode-function-result encode-function-result decode-event-log encode-event-topics parse-event-logs decode-error-result encode-error-result encode-abi-parameters decode-abi-parameters encode-packed encode-deploy-data decode-deploy-data get-abi-item function-selector event-selector=; =get-contract= (→ ={:client :address :abi}= bound map), =read! write! simulate! estimate-gas! deploy! multicall! events! create-event-filter!= (each takes the bound map or explicit =:address :abi=); data: =erc20-abi erc721-abi erc1155-abi erc4626-abi multicall3-abi= |
+| =viem-cljs.utils=        | 4     | ≈90 pure fns of section 7 (units, address, hash, signature, encoding, data, transaction, typed data, authorization, ens hashing) + constants (=zero-address zero-hash max-uint256 …=) |
+| =viem-cljs.events=       | 4     | =watch-block-number! watch-blocks! watch-block-headers! watch-event! watch-contract-event! watch-pending-transactions!= (→ channel), =stop!=; =create-event-filter! create-block-filter! create-pending-transaction-filter! create-contract-event-filter! filter-changes! filter-logs! uninstall-filter!= (promises) |
+| =viem-cljs.errors=       | 4     | =viem-error? error-name causes cause? revert-data rpc-code http-status user-rejected? insufficient-funds? nonce-too-low? timeout? execution-reverted?= (re-exports the util predicates) |
+| =dev/viem_cljs/smoke.cljs= | 5   | spawns =/home/borret/.foundry/bin/anvil= (v1.8.1, no npm package) as a child process, runs test + wallet + contract sections against it, plus read-only public-RPC sections; PASS/FAIL report |
+Naming (DECIDED 2026-09-25): viem name kebab-cased 1:1 (=getBlockNumber= →
+=get-block-number!=); =!= on every fn that can hit the network or move chain state
+(actions, test actions, watchers, keystore decryption); pure/local fns (format/parse,
+checksums, address tests, encode/decode, local-account signing) have no =!= even when
+they return a promise.
+** 11.2 Option translation (CLJS map → viem object), rules
+1. Keys: =kebab->camel= mechanically (=:max-fee-per-gas= → =maxFeePerGas=, =:block-tag= →
+   =blockTag=, =:from-block= → =fromBlock=). String keys pass through verbatim (the escape
+   hatch for Solidity struct fields with unusual casing).
+2. Boolean options written with =?= (=:strict? :poll? :emit-on-begin? :include-transactions?
+   :allow-failure? :deployless? :batch?=) have the =?= stripped before camelling
+   (=:strict?= → =strict=). Both spellings accepted.
+3. Keyword values → strings via =enum-value= (=:latest= → ="latest"=, =:eip1559= →
+   ="eip1559"=, =:success=). Applies to =block-tag=, =type=, =state-mutability=,
+   =mode=, =dir=, =to= (=:hex :bytes :bigint :number :string :boolean=).
+4. Quantities: any key in the *quantity set* (=value gas gas-price max-fee-per-gas
+   max-priority-fee-per-gas max-fee-per-blob-gas block-number from-block to-block (when
+   not a tag keyword) base-fee-per-gas gas-limit timestamp balance amount=) is coerced with
+   =util/->bigint= (BigInt | safe integer | decimal string | =0x= string). Everything else is
+   passed as-is (viem's =index= slots =nonce chain-id block-count confirmations
+   polling-interval timeout seconds interval account-index address-index= are JS numbers).
+5. =:chain= accepts a keyword (=:mainnet=), a chain id, a kebab map (=define-chain=
+   output or =chain->map= data), or an already-built chain object — resolved by
+   =chains/chain=. =:account= accepts an account object from =accounts=, an address
+   string, or a kebab map ={:address ..}= (json-rpc account).
+6. =:abi= accepts a vector of human-readable strings (auto =parseAbi=) or a JSON ABI as
+   kebab maps (mechanical translation) or a JS ABI array.
+7. =:args= is a vector; nested maps (structs) are translated with rule 1; BigInt/number/hex
+   values untouched (viem accepts JS numbers for =uintN= [RUN]).
+8. =nil= values are dropped; sets become arrays; functions (callbacks, custom signers)
+   pass through.
+9. Watcher callbacks are never exposed: =events= supplies them and feeds the channel.
+** 11.3 Result translation (viem value → CLJS), rules and value types
+1. Plain objects/arrays → kebab keyword maps / vectors (=->clj=), recursively; keys only —
+   values are never re-cased (hex strings, ="latest"=, ="success"= stay strings).
+2. *BigInt stays BigInt* (DECIDED 2026-09-25, uncertainty 12.1): every wei-denominated
+   amount arrives and leaves as an opaque, exact BigInt; CLJS arithmetic on them goes
+   through the provided helpers only (=utils/big=, =utils/add=, =utils/sub=, =utils/mul=,
+   =utils/div=, =utils/cmp=, =utils/format-units= …) — never =+ - inc dec= on mixed types. =value gas gasPrice
+   maxFeePerGas maxPriorityFeePerGas maxFeePerBlobGas blockNumber timestamp gasLimit gasUsed
+   cumulativeGasUsed effectiveGasPrice baseFeePerGas difficulty totalDifficulty size
+   blobGasUsed excessBlobGas blobGasPrice v oldestBlock= and every =uintN=/=intN= ABI value
+   arrive as JS BigInt; =nonce transactionIndex logIndex yParity chainId= and =getChainId=
+   / =getTransactionCount= / =getBlockTransactionCount= are JS numbers; =status= is
+   ="success"= / ="reverted"= (string, not keyword); =type= is ="eip1559"= etc.
+   =viem-cljs.util= makes BigInt hashable and prints it as =1000N=.
+3. Decoded ABI values: single output → bare value; multiple outputs → vector; named struct
+   → kebab map; unnamed event params → vector (=args=) [RUN section 4.2].
+4. Chain objects are not converted unless asked (=chains/chain->map=); account objects are
+   projected with =account->map= (=:address :type :source=) — never their signer closures
+   or key material.
+5. =Uint8Array= (bytes) values pass through untouched; =:to :bytes= variants exist on the
+   codec fns for callers who want them.
+6. Errors: section 9.5.
+** 11.4 Test strategy (network-free)
+=core/custom= over an in-memory responder (=test-util/rpc-stub=: a map or fn from
+JSON-RPC method → result / error ={:code :message :data}=) exercises every action,
+watcher (polling mode with a tiny =:polling-interval=), and error path, exactly as
+done in this inventory's [RUN] probes. ABI codecs, units, hashes and accounts (random
+key) are pure. The phase-5 smoke spawns anvil directly (=/home/borret/.foundry/bin/anvil=,
+v1.8.1, via Node =child_process= from the dev build — no anvil npm package) for wallet,
+test and contract sections, and uses a public RPC for read-only mainnet checks.
+
+* 12. Pitfalls and numbered uncertainties
+1. *BigInt house position.* viem returns JS BigInt for every quantity; CLJS numbers are
+   doubles (53-bit) so converting would silently corrupt wei amounts and =uint256= values.
+   RECOMMENDED (and implemented in =util=): keep BigInt end to end; accept BigInt / safe
+   integer / decimal string / hex string on input via =->bigint=; =bigint->number= returns
+   nil instead of losing precision; =utils/format-units= for display. Consequence to
+   document: =(+ 1 x)= throws (=TypeError: cannot mix BigInt=) — use BigInt literals on both
+   sides (=(js/BigInt 1)= or a =utils/big= helper); =inc=/=dec= don't work on BigInt.
+   Alternative (decimal strings everywhere, as in openrouter-cljs prices) rejected:
+   arithmetic and comparisons on BigInt are native and exact.
+   DECIDED 2026-09-25 (Parley): YES — BigInt in/out, helpers-only arithmetic (11.3).
+2. *Function naming.* Proposal: viem names kebab-cased 1:1 with =!= on I/O
+   (=get-balance!=). Alternative: drop the =get-= prefix (=balance!=). The 1:1 rule keeps
+   viem.sh directly usable as documentation.
+   DECIDED 2026-09-25 (Parley): YES — =!= iff the fn can hit the network or move chain
+   state; pure/local fns (format/parse, checksums, address tests, encode/decode) no =!=.
+3. *Chain registry exposure.* 737 objects, 87 with functions inside, all with an =extend=
+   closure: not convertible to pure data losslessly. RECOMMENDED: keep JS chain objects
+   opaque behind =chains/chain= (keyword/id lookup, lazily) and offer =chain->map= for
+   inspection; =define-chain= takes a kebab map. Eagerly converting all 737 at load is
+   avoidable. Aliases (28 names sharing an id, e.g. =:foundry :anvil :hardhat= = 31337)
+   make =by-id= ambiguous — return the first name in registry order and document.
+   Open (implementation detail; the recommendation stands unless Parley objects).
+4. *Watcher backpressure.* viem invokes =onLogs= synchronously with batches; the channel
+   producer uses =put!= with a callback. With the default 1024 buffer, a slow consumer on
+   a busy mainnet log stream will fill it; core.async then queues pending puts up to 1024
+   and throws beyond. Options: (a) default =(async/chan 1024)= + documented =:buf=
+   (sliding/dropping) — RECOMMENDED; (b) pause the watcher (unwatch/rewatch) when full —
+   complex. Verify in phase 4 with a synthetic burst test. Channel contract (one event
+   per put, close on unsubscribe) APPROVED 2026-09-25.
+5. *Polling vs subscription.* viem chooses =eth_subscribe= automatically for webSocket/ipc
+   transports and polling for http; =:poll? true= forces polling on sockets;
+   =watch-block-headers!= is socket-only. The channel API is identical either way; the
+   difference is latency and RPC cost. No wrapper decision needed beyond pass-through.
+6. *Struct field re-casing.* =camel->kebab= lowers a LEADING capital without a dash
+   (=Owner= → =:owner=), so a Solidity struct field starting with a capital cannot be
+   round-tripped through keyword keys. Escape hatch: string keys pass through verbatim in
+   =->js=. Consecutive capitals (=tokenURI= → =:token-u-r-i=) round-trip but read oddly.
+   Decide whether =args= subtrees should skip re-casing entirely (then event =args= from
+   =decode-event-log= would keep camelCase keys — inconsistent with the rest). RECOMMENDED:
+   re-case (consistency), document the escape hatch.
+7. *=formatAbi= is not in viem.* Only =formatAbiItem= (per item). Wrapper offers
+   =format-abi= = =(mapv format-abi-item abi)=; confirm this is enough.
+8. *=getContract= Proxies.* Members are Proxies whose keys are unknowable
+   (=Object.keys= empty); wrapping them would require interop at call sites. Replaced by
+   =contract/get-contract= + explicit fns. APPROVED 2026-09-25 (bound contract map,
+   actions called through it).
+9. *Non-BaseError throws.* ox (=Value.InvalidDecimalNumberError=), abitype
+   (=UnknownSignatureError=), plain =Error=/=SyntaxError= from =parseSignature= /
+   =hexToNumber=. =util/viem-error= wraps them generically (=:name= from =name=); whether to
+   strip the ox =Value.= prefix in =:name= is open. RECOMMENDED: keep verbatim.
+10. *=http()= without URL and without chain throws synchronously* in =createClient=
+    (=UrlRequiredError=) [RUN]; with a chain it silently uses the chain's public default
+    RPC (mainnet: =https://ethereum.reth.rs/rpc=). The wrapper should reject
+    =:viem-cljs/config-error= early and document the public-RPC rate limits.
+11. *Sync action variants* (=sendTransactionSync=, =writeContractSync=,
+    =sendRawTransactionSync=, =sendCallsSync=) depend on =eth_sendRawTransactionSync=
+    (EIP-7966) node support; anvil ≥ 1.x reportedly supports it, most public RPCs do not.
+    Wrap (Tier 1) but smoke only on anvil; expect =MethodNotSupportedRpcError= elsewhere.
+12. *Multicall batching on clients* (=:batch {:multicall true}=) turns concurrent
+    =read-contract!= / =call!= into Multicall3 aggregations; requires
+    =chain.contracts.multicall3= (or =deployless=) — a client on a custom chain without
+    it fails with =ChainDoesNotSupportContract= only when batching triggers. Document.
+13. *Node version.* No =engines= field; viem needs global =fetch= (Node ≥ 18) and uses
+    =isows=/=ws= for sockets. Tested here on Node 22.23.2; Node 18 is EOL — recommend
+    documenting Node ≥ 20.
+14. *Keystore JSON (=localAccountJson=).* Not in viem's surface; ox (viem's dependency)
+    has =ox/Keystore= but viem does not re-export it. DECIDED 2026-09-25 (Parley): YES,
+    add =account-from-keystore!= — implemented with Node =crypto= + viem =keccak256= /
+    =privateKeyToAccount= (section 5.3), =ox/Keystore= as fallback. Remaining risk:
+    ciphers other than =aes-128-ctr= or =prf= other than =hmac-sha256= are rejected with
+    =:viem-cljs/argument-error= (the v3 spec allows nothing else in practice).
+15. *EIP-1193 provider accounts vs local accounts.* In Node there is no injected
+    provider; wallet actions with a json-rpc account (=:account "0x…"=) need a transport
+    whose node can sign (anvil unlocked/impersonated accounts) — the phase-5 smoke covers
+    both paths (local account → =eth_sendRawTransaction=; impersonated address →
+    =eth_sendTransaction=). Browser wallets are out of scope for tests.
+16. *Gas estimation edge cases.* =estimateGas= / =simulateContract= reject with
+    =EstimateGasExecutionError= / =ContractFunctionExecutionError= whose root is a
+    node-message-classified error (=InsufficientFundsError=, =ExecutionRevertedError=,
+    =IntrinsicGasTooLowError= …); the classification depends on the node's error strings
+    (=UnknownNodeError= otherwise). =prepareTransactionRequest= fills =gas= via
+    =estimateGas= unless given; on chains with L1 data fees (OP Stack) the estimate excludes
+    the L1 fee (use =viem/op-stack= =estimateTotalFee=, Tier 2).
+17. *=client.token= / =tokens=.* New in 2.5x (=createPublicClient= gained a =token= key
+    and a =tokens= config); semantics for non-Tempo chains not verified. Tier 2.
+18. *anvil availability for the smoke.* DECIDED 2026-09-25 (Parley): anvil is installed
+    at =/home/borret/.foundry/bin/anvil= (v1.8.1 verified); the phase-5 smoke spawns it as
+    a subprocess directly — no anvil npm package. Fallback when the binary is missing:
+    read-only public-RPC sections only, wallet/test sections reported SKIPPED.
+19. *=localStorage= / =memory= transports.* DECIDED 2026-09-25: not in viem, not invented;
+    in-memory = =custom= transport (covered), localStorage = out of scope (section 2.2).
+
+* 13. Sources
+** Installed package (ground truth, 2026-09-25)
+- =node_modules/viem/package.json= (version 2.56.9, exports map)
+- =node_modules/viem/_types/index.d.ts=, =clients/*.d.ts=, =clients/transports/*.d.ts=,
+  =actions/{public,wallet,test,ens,siwe}/*.d.ts=, =actions/getContract.d.ts=,
+  =accounts/*.d.ts=, =types/{chain,transaction,block,log,fee,misc,account,transport}.d.ts=,
+  =utils/**/*.d.ts=, =errors/*.d.ts=
+- runtime enumeration and probes in Node 22.23.2 (scripts in the job tmp dir; not part of
+  the repository)
+** Docs pages (viem.sh, consulted 2026-09-25 for semantics)
+- https://viem.sh/docs/clients/intro , https://viem.sh/docs/clients/custom
+- https://viem.sh/docs/clients/transports/http , /websocket , /fallback , /custom , /ipc
+- https://viem.sh/docs/actions/public/introduction , /wallet/introduction , /test/introduction
+- https://viem.sh/docs/contract/getContract , /readContract , /simulateContract , /watchContractEvent
+- https://viem.sh/docs/error-handling , https://viem.sh/docs/glossary/errors
+- https://viem.sh/docs/ethers-migration (transport list cross-check)
+- https://viem.sh/tokens/actions (2.5x tokens feature)
