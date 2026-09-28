@@ -1,5 +1,5 @@
 (ns viem-cljs.actions
-  "Every viem action of the main surface (inventory 3 / Tier 1) in the
+  "Every viem action of the main surface in the
    tree-shakable shape: `(action! client opts)` -> promesa promise, working
    on ANY client kind (bare, public, wallet, test). Names are viem's,
    kebab-cased 1:1 with a `!` suffix (`getBlockNumber` -> `get-block-number!`).

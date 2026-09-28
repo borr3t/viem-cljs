@@ -1,9 +1,9 @@
 (ns viem-cljs.contract
-  "Contracts as data (inventory 4): ABI parsing / formatting, every ABI codec,
+  "Contracts as data: ABI parsing / formatting, every ABI codec,
    the standard ABIs, and a data-based bound contract — `bind` (alias
    `get-contract`) returns a plain map `{:client :address :abi :account}`
    consumed by `read!`, `simulate!`, `write!`, `estimate-gas!`, `events!`,
-   `create-event-filter!` (viem's Proxy-based `getContract` is Tier 3 and not
+   `create-event-filter!` (viem's Proxy-based `getContract` is not
    wrapped). `:function-name` may be a keyword (`:balance-of` -> \"balanceOf\")
    or a string; `:event-name` should be a string or a leading-capital keyword
    (`:Transfer`) because event names are capitalized. Pure ClojureScript:
@@ -44,7 +44,7 @@
 
 (defn format-abi
   "Whole ABI -> vector of signature strings (`(mapv format-abi-item abi)`;
-   viem has no `formatAbi`, inventory 12.7)."
+   viem has no `formatAbi`)."
   [abi]
   (mapv format-abi-item (parse-abi abi)))
 
@@ -205,7 +205,7 @@
       account (assoc :account account))))
 
 (defn get-contract
-  "Alias of `bind` (the inventory's name, 4.4)."
+  "Alias of `bind`, under the name viem gives it."
   [opts]
   (bind opts))
 

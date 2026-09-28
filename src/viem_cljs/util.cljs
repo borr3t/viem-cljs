@@ -12,7 +12,7 @@
             [goog.object :as gobj]))
 
 ;; ---------------------------------------------------------------------------
-;; kebab-case <-> camelCase (inventory 11.2: viem is one camelCase dialect)
+;; kebab-case <-> camelCase (viem is one camelCase dialect)
 ;; ---------------------------------------------------------------------------
 
 (defn kebab->camel
@@ -37,7 +37,7 @@
    \"l1Fee\" -> :l1-fee. Works on strings and keywords, returns a keyword.
    Namespaced keywords are returned unchanged. A LEADING capital is lowered
    without a dash (\"Transfer\" -> :transfer), which is the one lossy case
-   (inventory 12, pitfall: Solidity struct fields are camelCase in practice)."
+   (Solidity struct fields are camelCase in practice)."
   [k]
   (if (and (keyword? k) (namespace k))
     k
@@ -69,7 +69,7 @@
   (if (keyword? v) (kebab->camel v) v))
 
 ;; ---------------------------------------------------------------------------
-;; BigInt (inventory 11.3: wei, gas, block numbers, timestamps are BigInt
+;; BigInt (wei, gas, block numbers, timestamps are BigInt
 ;; on the viem side; the library keeps them BigInt — exact, arithmetic-safe)
 ;; ---------------------------------------------------------------------------
 
@@ -160,7 +160,7 @@
   (when (some? o) (apply gobj/getValueByKeys o path)))
 
 ;; ---------------------------------------------------------------------------
-;; Errors (inventory 9: viem's BaseError family; every viem rejection is
+;; Errors (viem's BaseError family; every viem rejection is
 ;; re-thrown as ex-info with :type :viem-cljs/viem-error)
 ;; ---------------------------------------------------------------------------
 
@@ -284,7 +284,7 @@
   (boolean (some #(= name %) (error-causes e))))
 
 ;; ---------------------------------------------------------------------------
-;; Secrets (inventory 5.2: key material never reaches logs, data or maps)
+;; Secrets (key material never reaches logs, data or maps)
 ;; ---------------------------------------------------------------------------
 
 (deftype Secret [value]

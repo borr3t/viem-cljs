@@ -1,5 +1,5 @@
 (ns viem-cljs.events
-  "Event watchers as core.async channels (inventory 8.2) and the server-side
+  "Event watchers as core.async channels and the server-side
    filter actions as promises.
 
    Channel contract: each `watch-*!` returns ONE channel; every put is a

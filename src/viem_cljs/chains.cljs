@@ -1,5 +1,5 @@
 (ns viem-cljs.chains
-  "Chain registry access (inventory 6): every `viem/chains` export by kebab
+  "Chain registry access: every `viem/chains` export by kebab
    keyword (`:mainnet`, `:base-sepolia`, `:zk-sync` …) or by id, lazily —
    chain objects stay opaque and are never converted unless `chain->map` is
    asked. Aliases sharing an id (`:anvil` / `:foundry` / `:hardhat` = 31337)

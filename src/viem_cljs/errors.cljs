@@ -1,7 +1,7 @@
 (ns viem-cljs.errors
-  "Accessors and classifiers over the errors viem-cljs raises (inventory 9,
-   9.5). Every rejection / throw crossing the boundary is an ex-info whose
-   data (`util/error-data`) carries the viem class name, the short message,
+  "Accessors and classifiers over the errors viem-cljs raises. Every
+   rejection / throw crossing the boundary is an ex-info whose data
+   (`util/error-data`) carries the viem class name, the short message,
    the `:causes` chain (outermost first, each a summary map with `:name
    :short-message :message :details :code :data :reason :status :url` when
    present) and the raw JS error under `:cause`. The fns here read that data
@@ -18,7 +18,7 @@
    - classification: `user-rejected?`, `insufficient-funds?`, `nonce-too-low?`,
      `rate-limited?`, `timeout?`, `connection-error?`, `reverted?` … each a
      heuristic over class names, JSON-RPC codes and node message text
-     (viem itself classifies node errors from message text, inventory 9.2),
+     (viem itself classifies node errors from message text),
      summarized by `category` and the retry advice `retryable?` / `retry-hint`."
   (:require [clojure.string :as str]
             [viem-cljs.util :as util]))
@@ -226,7 +226,7 @@
       (:details (cause-named e "ExecutionRevertedError"))))
 
 ;; ---------------------------------------------------------------------------
-;; Classification heuristics (inventory 9.2 families + node message text)
+;; Classification heuristics (viem error class families + node message text)
 ;; ---------------------------------------------------------------------------
 
 (defn- text
@@ -389,8 +389,8 @@
       (text? e #"chain not configured|chain mismatch|does not support contract|unsupported chain")))
 
 (defn abi-error?
-  "True for an ABI codec problem (the 25 `Abi*` / `*Mismatch` classes of
-   inventory 9.2): wrong ABI, wrong args, undecodable data — a bug, not a
+  "True for an ABI codec problem (viem's `Abi*` / `*Mismatch` error
+   classes): wrong ABI, wrong args, undecodable data — a bug, not a
    transient."
   [e]
   (boolean (walk-cause e #(re-find #"^Abi|^DecodeLog|^InvalidAbi|^BytesSizeMismatch|^UnsupportedPackedAbiType" (str (:name %))))))

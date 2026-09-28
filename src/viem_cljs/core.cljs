@@ -1,15 +1,15 @@
 (ns viem-cljs.core
-  "The ONE viem interop namespace of viem-cljs (inventory 11.1 merged the
-   planned `binding` layer into here). Everything that touches a viem export
-   lives in this file — client construction, transports, the chain registry,
-   account factories, keystore decryption and the generic dispatchers
-   (`action!`, `watch!`, `invoke-util`) that `actions`, `contract`, `chains`,
-   `utils` and `events` call. Those namespaces are plain ClojureScript.
+  "The ONE viem interop namespace of viem-cljs. Everything that touches a
+   viem export lives in this file — client construction, transports, the
+   chain registry, account factories, keystore decryption and the generic
+   dispatchers (`action!`, `watch!`, `invoke-util`) that `actions`,
+   `contract`, `chains`, `utils` and `events` call. Those namespaces are
+   plain ClojureScript.
 
-   House style inside this file: `js-invoke` + `goog.object` (`util/jsget`)
+   Interop style inside this file: `js-invoke` + `goog.object` (`util/jsget`)
    only; no `^js` hints, no dot-forms.
 
-   Conventions (inventory 11.2 / 11.3):
+   Conventions:
    - options are kebab-case keyword maps; keys are camelled mechanically,
      `?`-suffixed booleans are stripped, keyword values become strings,
      quantity keys (`:value :gas :block-number …`) are coerced with
@@ -82,7 +82,7 @@
   (some (fn [m] (let [v (gobj/get m camel-name)] (when (some? v) v))) modules))
 
 ;; ---------------------------------------------------------------------------
-;; Chain registry (inventory 6, 12.3: opaque objects, lazy indexes)
+;; Chain registry (opaque objects, lazy indexes)
 ;; ---------------------------------------------------------------------------
 
 (defonce ^:private chain-index
@@ -195,7 +195,7 @@
                                   :block-number (util/->bigint block-number)})))))
 
 ;; ---------------------------------------------------------------------------
-;; Accounts (inventory 5)
+;; Accounts
 ;; ---------------------------------------------------------------------------
 
 (defn account-object?
@@ -416,7 +416,7 @@
   (account-method! account "sign" opts :sign))
 
 ;; ---------------------------------------------------------------------------
-;; Keystore v3 decryption (inventory 5.3, DECIDED: Node crypto + viem keccak256)
+;; Keystore v3 decryption (Node crypto + viem keccak256)
 ;; ---------------------------------------------------------------------------
 
 (defn- buffer-from-hex [s]
@@ -492,7 +492,7 @@
    identity))
 
 ;; ---------------------------------------------------------------------------
-;; Option translation (inventory 11.2)
+;; Option translation
 ;; ---------------------------------------------------------------------------
 
 (def quantity-keys
@@ -580,9 +580,9 @@
      :else x)))
 
 (defn opts->js
-  "Kebab option map -> viem parameter object (all rules of inventory 11.2).
-   nil / empty -> empty object. `skip` (set of kebab keys) disables the
-   special handling for those keys."
+  "Kebab option map -> viem parameter object (every rule of the option
+   translation above). nil / empty -> empty object. `skip` (set of kebab
+   keys) disables the special handling for those keys."
   ([opts] (opts->js opts #{}))
   ([opts skip] (util/->js (prepare-opts (or opts {}) skip))))
 
@@ -598,7 +598,7 @@
   {:set-storage-at #{:value}})
 
 ;; ---------------------------------------------------------------------------
-;; Transports (inventory 2.2) — data specs resolved at client construction
+;; Transports — data specs resolved at client construction
 ;; ---------------------------------------------------------------------------
 
 (defn http
@@ -729,7 +729,7 @@
                                                  cfg)))))))
 
 ;; ---------------------------------------------------------------------------
-;; Clients (inventory 2.1)
+;; Clients
 ;; ---------------------------------------------------------------------------
 
 (defn client?
@@ -823,7 +823,7 @@
             util/->clj))
 
 ;; ---------------------------------------------------------------------------
-;; Action dispatch (inventory 3, 2.3: tree-shakable shape, client first)
+;; Action dispatch (tree-shakable shape, client first)
 ;; ---------------------------------------------------------------------------
 
 (defn- action-fn [kw]
@@ -906,7 +906,7 @@
                       callbacks)))
 
 ;; ---------------------------------------------------------------------------
-;; Watchers (inventory 8): viem callbacks -> CLJS handlers; returns unwatch
+;; Watchers: viem callbacks -> CLJS handlers; returns unwatch
 ;; ---------------------------------------------------------------------------
 
 (defn watch!
@@ -931,7 +931,7 @@
     (guard kw #(f client (opts->js (merge opts js-handlers))))))
 
 ;; ---------------------------------------------------------------------------
-;; Utility dispatch (inventory 7): pure viem fns by name
+;; Utility dispatch: pure viem fns by name
 ;; ---------------------------------------------------------------------------
 
 (defn- util-fn [fname]

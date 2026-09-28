@@ -1,11 +1,11 @@
 (ns viem-cljs.utils
-  "The pure viem utilities (inventory 7, Tier 1): units, address, hash,
-   signature, encoding, data, transaction, typed data, authorization, ENS
-   hashing, constants, BigInt-safe `stringify` — plus the BigInt arithmetic
-   helpers the house rules require (`big`, `add`, `sub`, `mul`, `div`, `cmp`
-   …: wei amounts are BigInt end to end and must never meet CLJS numbers in
-   `+`/`inc`). No `!`: nothing here touches the network (the `recover-*` /
-   `verify-*` fns return promises because viem's do, but they are local).
+  "The pure viem utilities: units, address, hash, signature, encoding, data,
+   transaction, typed data, authorization, ENS hashing, constants,
+   BigInt-safe `stringify` — plus the BigInt arithmetic helpers (`big`,
+   `add`, `sub`, `mul`, `div`, `cmp` …: wei amounts are BigInt end to end
+   and must never meet CLJS numbers in `+`/`inc`). No `!`: nothing here
+   touches the network (the `recover-*` / `verify-*` fns return promises
+   because viem's do, but they are local).
    Every viem throw is re-thrown as a viem-cljs ex-info. Pure ClojureScript:
    interop lives in `viem-cljs.core`."
   (:refer-clojure :exclude [max min mod concat zero?])
@@ -13,7 +13,7 @@
             [viem-cljs.util :as util]))
 
 ;; ---------------------------------------------------------------------------
-;; BigInt helpers (inventory 12.1 — helpers-only arithmetic)
+;; BigInt helpers (arithmetic on BigInt goes through these only)
 ;; ---------------------------------------------------------------------------
 
 (defn big
